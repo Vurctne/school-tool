@@ -53,8 +53,11 @@ INFO_BORDER = "#B8CCDD"
 INFO_FG = "#124466"
 
 # Colors — data highlights (openpyxl fills, no leading #)
+# matches --hl-edited in design_system/design_handoff_school_finance_toolkit/colors_and_type.css
 HL_EDITED = "FFF2CC"
+# matches --hl-mismatch in design_system/design_handoff_school_finance_toolkit/colors_and_type.css
 HL_MISMATCH = "F4CCCC"
+# matches --hl-source-only in design_system/design_handoff_school_finance_toolkit/colors_and_type.css  # noqa: E501
 HL_SOURCE_ONLY = "E2F0D9"
 
 # Typography — font sizes (px as int)

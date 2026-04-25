@@ -45,6 +45,7 @@ Usage example
     # Win32 COM
     ws.Range("A1").Interior.Color = bgr_int(HL_SOURCE_ONLY)
 """
+
 from __future__ import annotations
 
 _HEX_CHARS = frozenset("0123456789ABCDEFabcdef")
@@ -59,8 +60,7 @@ def _validate(hex_rgb: str) -> str:
     s = hex_rgb.lstrip("#").upper()
     if len(s) != 6 or not all(c in _HEX_CHARS for c in s):
         raise ValueError(
-            f"hex_rgb must be exactly 6 hex digits (with or without a "
-            f"leading '#'); got {hex_rgb!r}"
+            f"hex_rgb must be exactly 6 hex digits (with or without a leading '#'); got {hex_rgb!r}"
         )
     return s
 

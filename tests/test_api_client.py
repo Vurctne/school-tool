@@ -172,8 +172,14 @@ def test_register_verify_login_happy_path() -> None:
 
     client = _make_client(httpx.MockTransport(handler))
     client.register(
-        {"email": "z@z.com", "password": "p", "first_name": "Z", "last_name": "Z",
-         "school_name": "S", "abn": "123"}
+        {
+            "email": "z@z.com",
+            "password": "p",
+            "first_name": "Z",
+            "last_name": "Z",
+            "school_name": "S",
+            "abn": "123",
+        }
     )
     client.verify_email("verify_tok_123")
     result = client.login("z@z.com", "p", "dev-1")

@@ -88,7 +88,7 @@ Please send feedback to Vurctne@gmail.com
 # Over-budget highlight (without leading #, as required by openpyxl fills)
 # ---------------------------------------------------------------------------
 
-_OVER_BG = "#" + HL_MISMATCH  # "#F4CCCC"
+_OVER_BG = "#" + HL_MISMATCH
 
 # ---------------------------------------------------------------------------
 # Table column schema
@@ -162,9 +162,7 @@ class SubProgramBudgetReportTool:
             report_file = Path(paths["report_file"])
 
             raw_comments = paths.get("comments_file")
-            comments_file: Path | None = (
-                Path(raw_comments) if raw_comments else None
-            )
+            comments_file: Path | None = Path(raw_comments) if raw_comments else None
 
             raw_output = paths.get("output_file")
             if raw_output:
@@ -175,9 +173,7 @@ class SubProgramBudgetReportTool:
 
                 ts = datetime.now().strftime("%Y%m%d_%H%M")
                 stem = report_file.stem
-                output_file = report_file.with_name(
-                    f"Annual_SubProgram_{stem}_AUTO_{ts}.xlsx"
-                )
+                output_file = report_file.with_name(f"Annual_SubProgram_{stem}_AUTO_{ts}.xlsx")
 
             # 2. Delegate to logic.
             summary: ReportSummary = logic.generate_report(
@@ -207,9 +203,7 @@ class SubProgramBudgetReportTool:
             return ToolResult(
                 status="error",
                 banner_level="danger",
-                banner_text=(
-                    f"An error occurred ({type(exc).__name__}): {exc}"
-                ),
+                banner_text=(f"An error occurred ({type(exc).__name__}): {exc}"),
                 log_lines=[
                     LogLine("ERROR", tag="heading"),
                     LogLine(f"{type(exc).__name__}: {exc}", tag="danger"),
@@ -248,10 +242,7 @@ class SubProgramBudgetReportTool:
             banner_level: str = "ok"
         elif n_over == 1:
             ob = over[0]
-            banner_text = (
-                base_banner
-                + f" 1 line over budget: {ob.sub_program}/{ob.account}."
-            )
+            banner_text = base_banner + f" 1 line over budget: {ob.sub_program}/{ob.account}."
             status = "warning"
             banner_level = "warning"
         else:

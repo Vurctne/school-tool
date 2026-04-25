@@ -119,7 +119,7 @@ def _verify_signature(doc: dict[str, Any]) -> bool:
 
     # Strip the "ed25519:" prefix if present.
     if sig_str.startswith("ed25519:"):
-        sig_str = sig_str[len("ed25519:"):]
+        sig_str = sig_str[len("ed25519:") :]
 
     try:
         sig_bytes = base64.b64decode(sig_str)

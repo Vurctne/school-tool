@@ -28,8 +28,8 @@ import ast
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 from toolkit.tokens import HL_EDITED, HL_MISMATCH, HL_SOURCE_ONLY
 
@@ -43,9 +43,7 @@ _CANONICAL_HEX: frozenset[str] = frozenset(
 )
 
 # Set of HL_* identifier names (used for AST Name checks).
-_CANONICAL_NAMES: frozenset[str] = frozenset(
-    {"HL_EDITED", "HL_MISMATCH", "HL_SOURCE_ONLY"}
-)
+_CANONICAL_NAMES: frozenset[str] = frozenset({"HL_EDITED", "HL_MISMATCH", "HL_SOURCE_ONLY"})
 
 # Regex that finds a bare #RRGGBB hex literal inside any string value.
 _HEX_RE = re.compile(r"#([0-9A-Fa-f]{6})")
@@ -246,4 +244,26 @@ def test_pattern_fill_colours_are_canonical() -> None:
     assert not violations, (
         "Non-canonical PatternFill fgColor value(s) detected in tools/:\n"
         + "\n".join(f"  {v}" for v in violations)
+    )
+
+
+def test_canonical_token_values() -> None:
+    """Pin the absolute hex of the three highlight tokens.
+
+    `test_tokens_not_drifted` only checks Python<->CSS parity. If both sides drift
+    to the same wrong value, that test passes. This test is the second hand on
+    the clock -- the three highlight roles (yellow/edited, pink/mismatch,
+    green/source-only) must hold their hex values *forever*; if a refresh of
+    the design system genuinely renames any of them, that's a deliberate
+    cross-cutting change that should also update this test.
+    """
+    assert HL_EDITED == "FFF2CC", (
+        "HL_EDITED is the yellow user-edited convention; canonical hex is FFF2CC."
+    )
+    assert HL_MISMATCH == "F4CCCC", (
+        "HL_MISMATCH is the pink/red over-budget / row+column mismatch fill; "
+        "canonical hex is F4CCCC."
+    )
+    assert HL_SOURCE_ONLY == "E2F0D9", (
+        "HL_SOURCE_ONLY is the green source-only inserted-row fill; canonical hex is E2F0D9."
     )

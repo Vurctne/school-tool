@@ -9,6 +9,7 @@ Windows-only path (macro preservation via pywin32 COM) is covered by a
 single stub test that documents the intent and is unconditionally skipped
 on non-Windows platforms.
 """
+
 from __future__ import annotations
 
 import re
@@ -66,8 +67,10 @@ def test_happy_path_all_codes_match(tmp_path: Path) -> None:
     )
 
     assert summary.matched_rows == 5
-    assert summary.mismatch_codes == []
-    assert summary.source_only_codes == []
+    assert summary.mismatch_account_codes == []
+    assert summary.mismatch_subprogram_codes == []
+    assert summary.source_only_account_codes == []
+    assert summary.source_only_subprogram_codes == []
     assert output.exists()
     assert summary.output_path == output
 
@@ -86,8 +89,8 @@ def test_warning_path_mismatches(tmp_path: Path) -> None:
     master = tmp_path / "master.xlsm"
     output = tmp_path / "output.xlsm"
 
-    source_codes = ["71001", "71002", "71003"]   # A=71001, B=71002, C=71003
-    master_codes = ["71001", "71002", "71004"]   # A=71001, B=71002, D=71004
+    source_codes = ["71001", "71002", "71003"]  # A=71001, B=71002, C=71003
+    master_codes = ["71001", "71002", "71004"]  # A=71001, B=71002, D=71004
 
     rows = [(code, Decimal("500")) for code in source_codes]
     build_expense_file(expense, rows)
@@ -100,8 +103,8 @@ def test_warning_path_mismatches(tmp_path: Path) -> None:
         progress=_noop_progress,
     )
 
-    assert summary.mismatch_codes == ["71004"]    # D: in master but not source
-    assert summary.source_only_codes == ["71003"]  # C: in source but not master
+    assert summary.mismatch_account_codes == ["71004"]  # D: in master but not source
+    assert summary.source_only_account_codes == ["71003"]  # C: in source but not master
     assert output.exists()
 
 
@@ -366,8 +369,8 @@ def test_multiple_subprogram_columns_matched_cells(tmp_path: Path) -> None:
 
     assert summary.matched_rows == 2
     assert summary.matched_cells == 4
-    assert summary.mismatch_codes == []
-    assert summary.source_only_codes == []
+    assert summary.mismatch_account_codes == []
+    assert summary.source_only_account_codes == []
 
 
 # ---------------------------------------------------------------------------

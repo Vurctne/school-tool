@@ -41,6 +41,7 @@ No macros are included — this builder produces a plain .xlsm saved with
 keep_vba=False (openpyxl just writes the correct extension).  Macro
 preservation is Windows-only and tested separately.
 """
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -75,8 +76,8 @@ def build_expense_file(path: Path, rows: list[tuple[str, Decimal]]) -> None:
     sp_name = "Test SP"
 
     # Row 1: sub-program code header
-    ws.cell(1, 1).value = ""   # account-code column placeholder
-    ws.cell(1, 2).value = ""   # name column placeholder
+    ws.cell(1, 1).value = ""  # account-code column placeholder
+    ws.cell(1, 2).value = ""  # name column placeholder
     ws.cell(1, 3).value = sp_code
 
     # Row 2: sub-program name header
@@ -170,9 +171,7 @@ def build_expense_file_multi(
         ws.cell(row_idx, 2).value = f"Account {account_code}"
         for col_offset, sp_code in enumerate(subprogram_codes):
             amount = amounts.get(sp_code)
-            ws.cell(row_idx, 3 + col_offset).value = (
-                float(amount) if amount is not None else None
-            )
+            ws.cell(row_idx, 3 + col_offset).value = float(amount) if amount is not None else None
 
     wb.save(path)
 

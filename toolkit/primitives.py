@@ -1023,9 +1023,7 @@ def CommentaryDialog(  # noqa: N802
         font=label_font,
         anchor="w",
     )
-    context_lbl.pack(
-        side="top", fill="x", padx=tokens.SP_4, pady=(tokens.SP_3, tokens.SP_1)
-    )
+    context_lbl.pack(side="top", fill="x", padx=tokens.SP_4, pady=(tokens.SP_3, tokens.SP_1))
 
     # Text editor
     editor_frame = tk.Frame(right_frame, bg=tokens.BG_PANEL)
@@ -1116,6 +1114,7 @@ def CommentaryDialog(  # noqa: N802
         def _make_click(sid: str) -> Callable[..., None]:
             def _click(*_: Any) -> None:
                 _load_sp(sid)
+
             return _click
 
         row_lbl.bind("<Button-1>", _make_click(sp_id))

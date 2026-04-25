@@ -650,9 +650,7 @@ class TkShell(ttk.Frame):
         # Build the unlock frame lazily
         if self._unlock_frame is None:
             self._unlock_frame = tk.Frame(self._content_outer, bg=tokens.BG_MUTED)
-            self._unlock_frame.place(
-                in_=self._content_outer, x=0, y=0, relwidth=1.0, relheight=1.0
-            )
+            self._unlock_frame.place(in_=self._content_outer, x=0, y=0, relwidth=1.0, relheight=1.0)
 
             pad = tokens.SP_4
 
@@ -666,9 +664,7 @@ class TkShell(ttk.Frame):
             tk.Label(
                 hdr_frame,
                 textvariable=self._unlock_title_var,
-                font=_tkfont.Font(
-                    family=self._fonts.sans_family, size=tokens.FS_16, weight="bold"
-                ),
+                font=_tkfont.Font(family=self._fonts.sans_family, size=tokens.FS_16, weight="bold"),
                 fg=tokens.FG_1,
                 bg=tokens.BG_MUTED,
                 anchor="w",
@@ -896,9 +892,12 @@ class TkShell(ttk.Frame):
         # are treated as monospace blocks.
         for line in help_text.splitlines():
             stripped = line.strip()
-            is_heading = bool(stripped) and stripped == stripped.upper() and any(
-                c.isalpha() for c in stripped
-            ) and len(stripped) > 2
+            is_heading = (
+                bool(stripped)
+                and stripped == stripped.upper()
+                and any(c.isalpha() for c in stripped)
+                and len(stripped) > 2
+            )
             is_mono = line.startswith("    ")
             if is_heading:
                 _insert_line_with_swatches(line, "heading")
@@ -938,9 +937,7 @@ class TkShell(ttk.Frame):
                 self._content_outer,
                 fonts=self._fonts,
             )
-            self._user_frame.place(
-                in_=self._content_outer, x=0, y=0, relwidth=1.0, relheight=1.0
-            )
+            self._user_frame.place(in_=self._content_outer, x=0, y=0, relwidth=1.0, relheight=1.0)
 
         # Hide all tool frames AND the unlock CTA before lifting the user frame.
         for frame in self._tool_frames.values():

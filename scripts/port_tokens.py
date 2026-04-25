@@ -211,6 +211,13 @@ def _generate(css_path: Path) -> str:
             label, _ = _GROUP_ORDER[g] if g < len(_GROUP_ORDER) else ("# Other", None)
             lines.append(label)
             current_group = g
+        if py_name in _OPENPYXL_FILLS:
+            css_prop = "--" + py_name.lower().replace("_", "-")
+            _css_file = "design_system/design_handoff_school_finance_toolkit/colors_and_type.css"
+            comment = f"# matches {css_prop} in {_css_file}"
+            if len(comment) > 100:
+                comment += "  # noqa: E501"
+            lines.append(comment)
         lines.append(f"{py_name} = {literal}")
 
     lines.append("")  # trailing newline (file ends with \n)

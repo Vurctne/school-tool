@@ -3,6 +3,7 @@
 All logic.import_expense_sub_program calls are mocked so no real xlsx
 fixtures are required.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -17,22 +18,27 @@ from tools.master_budget.logic import ImportSummary
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _noop_progress(pct: int, msg: str) -> None:
     pass
 
 
 def _make_summary(
     *,
-    mismatch_codes: list[str] | None = None,
-    source_only_codes: list[str] | None = None,
+    mismatch_account_codes: list[str] | None = None,
+    mismatch_subprogram_codes: list[str] | None = None,
+    source_only_account_codes: list[str] | None = None,
+    source_only_subprogram_codes: list[str] | None = None,
     matched_rows: int = 5,
     matched_cells: int = 20,
 ) -> ImportSummary:
     return ImportSummary(
         matched_rows=matched_rows,
         matched_cells=matched_cells,
-        mismatch_codes=mismatch_codes or [],
-        source_only_codes=source_only_codes or [],
+        mismatch_account_codes=mismatch_account_codes or [],
+        mismatch_subprogram_codes=mismatch_subprogram_codes or [],
+        source_only_account_codes=source_only_account_codes or [],
+        source_only_subprogram_codes=source_only_subprogram_codes or [],
         output_path=Path("/tmp/output.xlsm"),
     )
 
@@ -167,41 +173,41 @@ class TestRunSuccess:
 
 class TestRunWarning:
     def test_status_warning_when_mismatch_codes(self) -> None:
-        summary = _make_summary(mismatch_codes=["71000", "72000"])
+        summary = _make_summary(mismatch_account_codes=["71000", "72000"])
         result = _run_with_mock_summary(summary)
         assert result.status == "warning"
 
     def test_banner_level_warning_when_mismatch_codes(self) -> None:
-        summary = _make_summary(mismatch_codes=["71000"])
+        summary = _make_summary(mismatch_account_codes=["71000"])
         result = _run_with_mock_summary(summary)
         assert result.banner_level == "warning"
 
     def test_banner_text_mentions_mismatch_count(self) -> None:
-        summary = _make_summary(mismatch_codes=["71000", "72000", "73000"])
+        summary = _make_summary(mismatch_account_codes=["71000", "72000", "73000"])
         result = _run_with_mock_summary(summary)
         assert "3" in result.banner_text
 
     def test_status_warning_when_source_only_codes(self) -> None:
-        summary = _make_summary(source_only_codes=["80000"])
+        summary = _make_summary(source_only_account_codes=["80000"])
         result = _run_with_mock_summary(summary)
         assert result.status == "warning"
 
     def test_status_warning_when_both_code_lists_non_empty(self) -> None:
         summary = _make_summary(
-            mismatch_codes=["71000"],
-            source_only_codes=["80000"],
+            mismatch_account_codes=["71000"],
+            source_only_account_codes=["80000"],
         )
         result = _run_with_mock_summary(summary)
         assert result.status == "warning"
 
     def test_mismatch_codes_appear_in_log(self) -> None:
-        summary = _make_summary(mismatch_codes=["71000"])
+        summary = _make_summary(mismatch_account_codes=["71000"])
         result = _run_with_mock_summary(summary)
         all_text = " ".join(ll.text for ll in result.log_lines)
         assert "71000" in all_text
 
     def test_source_only_codes_appear_in_log(self) -> None:
-        summary = _make_summary(source_only_codes=["80000"])
+        summary = _make_summary(source_only_account_codes=["80000"])
         result = _run_with_mock_summary(summary)
         all_text = " ".join(ll.text for ll in result.log_lines)
         assert "80000" in all_text
@@ -270,13 +276,102 @@ class TestRegistry:
     def test_tool_is_registered_after_import(self) -> None:
         # Importing the package triggers register(MasterBudgetTool).
         import tools.master_budget  # noqa: F401  (side-effect: registers the tool)
-        from toolkit.registry import _registered
-
-        registered_ids = {cls.id for cls in _registered}
-        assert "master-budget" in registered_ids
-
-    def test_tool_appears_in_all_tools(self) -> None:
         from toolkit.registry import all_tools
 
-        ids = [t.id for t in all_tools()]
-        assert "master-budget" in ids
+        registered_ids = [t.id for t in all_tools()]
+        assert "master-budget" in registered_ids
+
+
+# ---------------------------------------------------------------------------
+# Bug regression guards (2026-04-25 fixes)
+# ---------------------------------------------------------------------------
+
+
+def test_mismatch_codes_log_tag_is_danger() -> None:
+    """Bug 2 regression guard: mismatch code log lines use tag='danger', not 'warning'.
+
+    The Excel cell fill is HL_MISMATCH (pink) and the user-facing instruction
+    text says 'Pink / red'. Before the 2026-04-25 fix the log used tag='warning'
+    (orange). A regression back to 'warning' would leave existing tests passing
+    but recreate the visual mismatch reported by the user.
+    """
+    summary = _make_summary(mismatch_account_codes=["70008"])
+    result = _run_with_mock_summary(summary)
+    code_lines = [ll for ll in result.log_lines if ll.text.strip() == "70008"]
+    assert code_lines, "expected one log line for code 70008"
+    assert code_lines[0].tag == "danger", (
+        "Bug 2 regression: mismatch code lines must use tag='danger' (red), "
+        "not 'warning' (orange). Match Excel pink fill + Instructions 'Pink / red'."
+    )
+
+
+def test_subprogram_column_codes_appear_in_log() -> None:
+    """Bug 3 regression guard: column-mismatch sub-program codes are surfaced in
+    the IMPORT SUMMARY log, not just painted into the workbook.
+
+    Before the 2026-04-25 fix the `ImportSummary` dataclass only carried account
+    codes (rows). The two sub-program-code lists (columns) were painted in the
+    output workbook but never reached the log. The user reported seeing pink
+    columns in Excel with no log explanation. The fix added two new fields and
+    two new log sections; this test pins both.
+    """
+    summary = _make_summary(
+        mismatch_subprogram_codes=["6052", "6201"],
+        source_only_subprogram_codes=["7350"],
+    )
+    result = _run_with_mock_summary(summary)
+    log_text = " ".join(ll.text for ll in result.log_lines)
+
+    # Column-mismatch section header + each code.
+    assert "Mismatch columns (2)" in log_text, (
+        "expected 'Mismatch columns (2)' header in log; got log:\n" + log_text
+    )
+    assert "6052" in log_text, "subprogram code 6052 missing from log"
+    assert "6201" in log_text, "subprogram code 6201 missing from log"
+
+    # Source-only column section header + the code.
+    assert "Source-only columns (1)" in log_text, "expected 'Source-only columns (1)' header in log"
+    assert "7350" in log_text, "subprogram code 7350 missing from log"
+
+    # Both column-mismatch lines should also use tag='danger' (consistent with row mismatches).
+    column_lines = [ll for ll in result.log_lines if ll.text.strip() in ("6052", "6201")]
+    assert len(column_lines) == 2
+    for ll in column_lines:
+        assert ll.tag == "danger", (
+            f"column mismatch code lines must use tag='danger', got {ll.tag!r}"
+        )
+
+
+def test_open_output_folder_uses_string_form_for_win32() -> None:
+    """Bug 1 regression guard: on win32, subprocess.Popen receives a STRING
+    (not a list) so explorer's /select parser handles spaces in OneDrive paths.
+
+    The previous list form `subprocess.Popen(["explorer", f"/select,{path}"])`
+    triggered Python's `list2cmdline` to quote the whole `/select,<path>`
+    together when the path contains spaces (e.g. `OneDrive - DET Schools`).
+    Explorer.exe doesn't recognise that form and falls back to opening the
+    default Documents folder. The fix passes a single string so Windows
+    `CreateProcess` hands it to explorer's own parser intact.
+    """
+    tool = MasterBudgetTool()
+    tool._last_output_path = Path(r"C:\Users\foo\OneDrive - DET Schools\file.xlsm")
+
+    with patch("sys.platform", "win32"), patch("subprocess.Popen") as mock_popen:
+        tool._open_output_folder()
+
+    assert mock_popen.called, "subprocess.Popen should have been called on win32"
+    args = mock_popen.call_args.args
+    assert args, "expected at least one positional arg to Popen"
+    cmd = args[0]
+    assert isinstance(cmd, str), (
+        f"Bug 1 regression: subprocess.Popen must receive a STRING (not list) "
+        f'so explorer parses /select,"<path>" correctly when path has spaces; '
+        f"got {type(cmd).__name__}: {cmd!r}"
+    )
+    assert cmd.startswith("explorer /select,"), f"unexpected command form: {cmd!r}"
+    # The path must appear double-quoted within the single command string,
+    # so explorer treats /select, unquoted but the path quoted.
+    assert cmd.count('"') == 2, (
+        f"expected exactly one double-quoted path segment in {cmd!r}; "
+        f"got {cmd.count(chr(34))} double-quote chars"
+    )

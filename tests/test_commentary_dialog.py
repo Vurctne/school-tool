@@ -151,9 +151,7 @@ def test_save_returns_dict_with_edited_entries(root: tk.Tk) -> None:
 
     assert ret is not None, "Expected dict, got None"
     assert ret.get("sp1") == "first note"
-    assert "second" in ret.get("sp2", ""), (
-        f"Expected 'second' in sp2 text, got {ret.get('sp2')!r}"
-    )
+    assert "second" in ret.get("sp2", ""), f"Expected 'second' in sp2 text, got {ret.get('sp2')!r}"
 
 
 def test_cancel_returns_none(root: tk.Tk) -> None:

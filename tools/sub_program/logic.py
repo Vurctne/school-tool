@@ -86,7 +86,7 @@ def parse_decimal(raw: str) -> Decimal:
 @dataclass(frozen=True)
 class SubProgramLine:
     sub_program: str
-    account: str       # section tag: "Revenue" | "Expenditure"
+    account: str  # section tag: "Revenue" | "Expenditure"
     description: str
     budget: Decimal
     ytd: Decimal
@@ -118,17 +118,17 @@ _EXPENDITURE_HDR = re.compile(r"Expenditure Recurrent", re.IGNORECASE)
 # Lines we must skip
 _SKIP_RE = re.compile(
     r"^("
-    r"\d{4}:\w"           # school header e.g. "8819:Melbourne"
+    r"\d{4}:\w"  # school header e.g. "8819:Melbourne"
     r"|General Ledger"
     r"|Annual Sub Program"
     r"|From Sub Program"
     r"|Revenue Recurrent"
     r"|Expenditure Recurrent"
-    r"|Sub Prog\."        # column header
+    r"|Sub Prog\."  # column header
     r"|Revenue totals"
     r"|Expenditure totals"
-    r"|\d+ \w+ \d{4}"     # date footer e.g. "3 March 2026"
-    r"|\d+ \[GL"          # page/number footer e.g. "1 [GL21157]"
+    r"|\d+ \w+ \d{4}"  # date footer e.g. "3 March 2026"
+    r"|\d+ \[GL"  # page/number footer e.g. "1 [GL21157]"
     r")",
     re.IGNORECASE,
 )
@@ -136,9 +136,7 @@ _SKIP_RE = re.compile(
 # Matches a whitespace-delimited field that is a standalone numeric token:
 # optional leading minus/dollar, digits with commas, optional decimal part;
 # OR a parenthesised value like (500.00).
-_NUM_PART_RE = re.compile(
-    r"^[\-\$]?[\d,]+(\.\d+)?$|^\([\d,]+(\.\d+)?\)$"
-)
+_NUM_PART_RE = re.compile(r"^[\-\$]?[\d,]+(\.\d+)?$|^\([\d,]+(\.\d+)?\)$")
 
 
 def _parse_numeric_tokens_from_parts(parts: list[str]) -> list[str]:
@@ -442,8 +440,7 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
 
     # Detect header columns
     header = [
-        str(c).strip().lower().replace("_", " ") if c is not None else ""
-        for c in all_rows[0]
+        str(c).strip().lower().replace("_", " ") if c is not None else "" for c in all_rows[0]
     ]
 
     try:
@@ -465,21 +462,9 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
     for row in all_rows[1:]:
         if not row:
             continue
-        sp = (
-            str(row[sp_col]).strip()
-            if sp_col < len(row) and row[sp_col] is not None
-            else ""
-        )
-        acc = (
-            str(row[acc_col]).strip()
-            if acc_col < len(row) and row[acc_col] is not None
-            else ""
-        )
-        txt = (
-            str(row[txt_col]).strip()
-            if txt_col < len(row) and row[txt_col] is not None
-            else ""
-        )
+        sp = str(row[sp_col]).strip() if sp_col < len(row) and row[sp_col] is not None else ""
+        acc = str(row[acc_col]).strip() if acc_col < len(row) and row[acc_col] is not None else ""
+        txt = str(row[txt_col]).strip() if txt_col < len(row) and row[txt_col] is not None else ""
         if sp or acc:
             result[(sp, acc)] = txt
 
@@ -590,8 +575,7 @@ def generate_report(
         lines = parse_sub_program_xlsx(report_file)
     else:
         raise ValueError(
-            f"Unsupported report file format: {suffix!r}. "
-            "Please supply a .pdf or .xlsx file."
+            f"Unsupported report file format: {suffix!r}. Please supply a .pdf or .xlsx file."
         )
 
     progress(40, "Joining commentary\u2026")

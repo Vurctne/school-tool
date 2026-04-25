@@ -30,9 +30,7 @@ def test_suggest_output_name_format(tmp_path: Path) -> None:
     master = tmp_path / "Master_Budget_2025.xlsm"
     master.touch()
     result = suggest_output_name(master)
-    pattern = re.compile(
-        r"Master_Budget_2025_AUTO_\d{8}_\d{4}\.xlsm$"
-    )
+    pattern = re.compile(r"Master_Budget_2025_AUTO_\d{8}_\d{4}\.xlsm$")
     assert pattern.search(result), f"Unexpected name: {result}"
 
 
@@ -91,10 +89,10 @@ def test_is_mismatch_account_code_filters_correctly() -> None:
     """Only 5-digit codes starting with 7 or 8 are tracked."""
     assert _is_mismatch_account_code("71001") is True
     assert _is_mismatch_account_code("80001") is True
-    assert _is_mismatch_account_code("26201") is False   # doesn't start with 7/8
-    assert _is_mismatch_account_code("7100") is False    # only 4 digits
+    assert _is_mismatch_account_code("26201") is False  # doesn't start with 7/8
+    assert _is_mismatch_account_code("7100") is False  # only 4 digits
     assert _is_mismatch_account_code("710011") is False  # 6 digits
-    assert _is_mismatch_account_code("ABCDE") is False   # non-numeric
+    assert _is_mismatch_account_code("ABCDE") is False  # non-numeric
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +162,8 @@ def test_clean_string_strips_whitespace() -> None:
 def test_sort_key_numeric_before_alpha() -> None:
     """Numeric codes sort before alphabetic ones."""
     keys = [_sort_key(c) for c in ["ABC", "12345", "99999", "DEF"]]
-    assert keys[1] < keys[0]   # "12345" < "ABC"
-    assert keys[2] < keys[3]   # "99999" < "DEF"
+    assert keys[1] < keys[0]  # "12345" < "ABC"
+    assert keys[2] < keys[3]  # "99999" < "DEF"
 
 
 def test_sort_key_numeric_ordering() -> None:
@@ -286,8 +284,10 @@ def test_import_summary_is_frozen(tmp_path: Path) -> None:
     summary = ImportSummary(
         matched_rows=10,
         matched_cells=50,
-        mismatch_codes=["71001"],
-        source_only_codes=[],
+        mismatch_account_codes=["71001"],
+        mismatch_subprogram_codes=[],
+        source_only_account_codes=[],
+        source_only_subprogram_codes=[],
         output_path=tmp_path / "out.xlsm",
     )
     with pytest.raises((AttributeError, TypeError)):
@@ -325,14 +325,12 @@ def test_com_interior_colour_matches_hl_mismatch() -> None:
     """
     import inspect
 
-    from tools.master_budget import logic as mb_logic
     from toolkit.fills import bgr_int
     from toolkit.tokens import HL_MISMATCH, HL_SOURCE_ONLY
+    from tools.master_budget import logic as mb_logic
 
     # 1. Math: the encoding of each token is exactly the historical value.
-    assert bgr_int(HL_MISMATCH) == 13421812, (
-        "HL_MISMATCH (#F4CCCC) must BGR-encode to 13421812"
-    )
+    assert bgr_int(HL_MISMATCH) == 13421812, "HL_MISMATCH (#F4CCCC) must BGR-encode to 13421812"
     assert bgr_int(HL_SOURCE_ONLY) == 14282978, (
         "HL_SOURCE_ONLY (#E2F0D9) must BGR-encode to 14282978"
     )

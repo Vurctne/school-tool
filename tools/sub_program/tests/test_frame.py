@@ -1,4 +1,5 @@
 """Tests for tools/sub_program/frame.py — BaseTool conformance + run() paths."""
+
 from __future__ import annotations
 
 from decimal import Decimal
@@ -7,6 +8,7 @@ from typing import Any
 from unittest.mock import patch
 
 from toolkit.base_tool import FileInput, OutputSpec
+from toolkit.tokens import HL_MISMATCH
 from tools.sub_program.frame import SubProgramBudgetReportTool
 from tools.sub_program.logic import ReportSummary, SubProgramLine
 
@@ -265,7 +267,7 @@ class TestRunWarningPath:
         assert result.table_rows is not None
         row = result.table_rows[0]
         assert row["_bg"] is not None
-        assert "F4CCCC" in row["_bg"]
+        assert HL_MISMATCH in row["_bg"]
 
     def test_non_over_budget_row_has_no_bg(self, tmp_path: Path) -> None:
         tool = SubProgramBudgetReportTool()

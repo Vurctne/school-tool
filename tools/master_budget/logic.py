@@ -33,10 +33,10 @@ pythoncom: Any = None
 pywintypes: Any = None
 win32com: Any = None
 win32com_client: Any = None  # the .client submodule — pywin32 quirk: importing
-                              # ``win32com`` alone does NOT attach ``client`` as
-                              # an attribute. We keep a separate handle so
-                              # callers can do ``win32com_client.DispatchEx(...)``
-                              # instead of the broken ``win32com.client...``.
+# ``win32com`` alone does NOT attach ``client`` as
+# an attribute. We keep a separate handle so
+# callers can do ``win32com_client.DispatchEx(...)``
+# instead of the broken ``win32com.client...``.
 win32process: Any = None
 HAVE_COM: bool = False
 
@@ -83,8 +83,10 @@ _PROTECTED_START_CODE = "26201"
 class ImportSummary:
     matched_rows: int
     matched_cells: int
-    mismatch_codes: list[str]  # master codes missing from source
-    source_only_codes: list[str]  # source codes missing from master
+    mismatch_account_codes: list[str]  # rows: master account codes missing from source
+    mismatch_subprogram_codes: list[str]  # columns: master subprogram codes missing from source
+    source_only_account_codes: list[str]  # rows: source account codes missing from master
+    source_only_subprogram_codes: list[str]  # columns: source subprogram codes missing from master
     output_path: Path
 
 
@@ -110,9 +112,7 @@ def suggest_output_name(master_file: Path) -> str:
     exactly (see ``app.py::BudgetAutomationApp._suggest_output``).
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    suggested = master_file.with_name(
-        f"{master_file.stem}_AUTO_{timestamp}{master_file.suffix}"
-    )
+    suggested = master_file.with_name(f"{master_file.stem}_AUTO_{timestamp}{master_file.suffix}")
     return str(suggested)
 
 
@@ -145,9 +145,7 @@ def import_expense_sub_program(
     wb = openpyxl.load_workbook(master_file, keep_vba=True, data_only=False)
     try:
         if _MASTER_SHEET not in wb.sheetnames:
-            raise _BudgetError(
-                f"Sheet '{_MASTER_SHEET}' was not found in the workbook."
-            )
+            raise _BudgetError(f"Sheet '{_MASTER_SHEET}' was not found in the workbook.")
         master_ws = wb[_MASTER_SHEET]
         protected_start_row = _find_protected_start_row(master_ws)
         master_map = _read_master_layout(
@@ -168,9 +166,7 @@ def import_expense_sub_program(
         wb.close()
 
     # --- compute mismatch sets -----------------------------------------------
-    master_codes_for_mismatch = {
-        c for c in master_map["row_codes"] if _is_mismatch_account_code(c)
-    }
+    master_codes_for_mismatch = {c for c in master_map["row_codes"] if _is_mismatch_account_code(c)}
     source_codes_for_mismatch = {
         c for c in source_data["row_codes"] if _is_mismatch_account_code(c)
     }
@@ -208,9 +204,7 @@ def import_expense_sub_program(
         wb = openpyxl.load_workbook(master_file, keep_vba=True, data_only=False)
         try:
             master_ws = wb[_MASTER_SHEET]
-            compass_ws = (
-                wb[_COMPASS_SHEET] if _COMPASS_SHEET in wb.sheetnames else None
-            )
+            compass_ws = wb[_COMPASS_SHEET] if _COMPASS_SHEET in wb.sheetnames else None
             protected_start_row = _find_protected_start_row(master_ws)
             progress(35, "Updating Master sheet...")
             master_map = _insert_source_only_items_openpyxl(
@@ -253,8 +247,10 @@ def import_expense_sub_program(
     return ImportSummary(
         matched_rows=matched_rows,
         matched_cells=matched_cells,
-        mismatch_codes=missing_master_codes,
-        source_only_codes=missing_source_codes,
+        mismatch_account_codes=missing_master_codes,
+        mismatch_subprogram_codes=missing_subprogram_codes,
+        source_only_account_codes=missing_source_codes,
+        source_only_subprogram_codes=source_extra_subprogram_codes,
         output_path=output_file,
     )
 
@@ -264,9 +260,7 @@ def import_expense_sub_program(
 # ---------------------------------------------------------------------------
 
 
-def _validate_paths(
-    source_path: Path, template_path: Path, output_path: Path
-) -> None:
+def _validate_paths(source_path: Path, template_path: Path, output_path: Path) -> None:
     source_resolved = source_path.resolve()
     template_resolved = template_path.resolve()
     output_resolved = output_path.resolve()
@@ -282,22 +276,14 @@ def _validate_paths(
     if output_path.suffix.lower() not in SUPPORTED_TARGET_EXTENSIONS:
         raise _BudgetError("Output workbook must be one of: .xlsx, .xlsm")
     if source_resolved == template_resolved:
-        raise _BudgetError(
-            "Source file and target workbook must be different files."
-        )
+        raise _BudgetError("Source file and target workbook must be different files.")
     if source_resolved == output_resolved:
-        raise _BudgetError(
-            "Output workbook must be different from the source file."
-        )
+        raise _BudgetError("Output workbook must be different from the source file.")
     if template_resolved == output_resolved:
         raise _BudgetError(
-            "Output workbook must be a new file. "
-            "Please do not save over the original template."
+            "Output workbook must be a new file. Please do not save over the original template."
         )
-    if (
-        template_path.suffix.lower() == ".xlsm"
-        and output_path.suffix.lower() != ".xlsm"
-    ):
+    if template_path.suffix.lower() == ".xlsm" and output_path.suffix.lower() != ".xlsm":
         raise _BudgetError(
             "Output workbook must use the .xlsm extension when the template "
             "workbook is .xlsm, otherwise macros and button bindings cannot be "
@@ -351,19 +337,11 @@ def _read_source(source_path: Path) -> dict[str, Any]:
         row_names[account_code] = _clean_string(row[1]) if len(row) > 1 else ""
 
     if duplicate_subprogram_codes:
-        duplicates = ", ".join(
-            sorted(set(duplicate_subprogram_codes), key=_sort_key)
-        )
-        raise _BudgetError(
-            f"Source file contains duplicate sub-program codes: {duplicates}"
-        )
+        duplicates = ", ".join(sorted(set(duplicate_subprogram_codes), key=_sort_key))
+        raise _BudgetError(f"Source file contains duplicate sub-program codes: {duplicates}")
     if duplicate_account_codes:
-        duplicates = ", ".join(
-            sorted(set(duplicate_account_codes), key=_sort_key)
-        )
-        raise _BudgetError(
-            f"Source file contains duplicate account codes: {duplicates}"
-        )
+        duplicates = ", ".join(sorted(set(duplicate_account_codes), key=_sort_key))
+        raise _BudgetError(f"Source file contains duplicate account codes: {duplicates}")
 
     return {
         "rows": data_rows,
@@ -425,9 +403,7 @@ def _editable_end_row(ws: Any, protected_start_row: int | None) -> int:
     return (protected_start_row - 1) if protected_start_row else ws.max_row
 
 
-def _read_master_layout(
-    ws: Any, editable_end_row: int | None = None
-) -> dict[str, Any]:
+def _read_master_layout(ws: Any, editable_end_row: int | None = None) -> dict[str, Any]:
     row_map: dict[str, int] = {}
     row_names: dict[str, str] = {}
     subprogram_map: dict[str, int] = {}
@@ -488,13 +464,9 @@ def _populate_master(
             cell.value = parsed
             if parsed is not None:
                 matched_cells += 1
-        if progress_callback is not None and (
-            index == total_rows or index % 10 == 0
-        ):
+        if progress_callback is not None and (index == total_rows or index % 10 == 0):
             pct = 55 + int(20 * index / total_rows)
-            progress_callback(
-                pct, f"Writing imported values... ({index}/{total_rows} rows)"
-            )
+            progress_callback(pct, f"Writing imported values... ({index}/{total_rows} rows)")
     return matched_cells, matched_rows
 
 
@@ -508,33 +480,23 @@ def _populate_compass(ws: Any, source_data: dict[str, Any]) -> None:
             cell.value = None
 
     ordered_subprogram_codes = [
-        code
-        for code in source_data["subprogram_map"].keys()
-        if code not in {"Total", "EI/SP"}
+        code for code in source_data["subprogram_map"].keys() if code not in {"Total", "EI/SP"}
     ]
     ordered_account_codes = list(source_data["rows"].keys())
 
     for col_idx, subprogram_code in enumerate(ordered_subprogram_codes, start=4):
         ws.cell(1, col_idx).value = (
-            int(subprogram_code)
-            if subprogram_code.isdigit()
-            else subprogram_code
+            int(subprogram_code) if subprogram_code.isdigit() else subprogram_code
         )
-        ws.cell(2, col_idx).value = source_data["subprogram_names"].get(
-            subprogram_code, ""
-        )
+        ws.cell(2, col_idx).value = source_data["subprogram_names"].get(subprogram_code, "")
 
     ws.cell(2, 2).value = "EI/SP"
     ws.cell(2, 3).value = "Total"
 
     for row_idx, account_code in enumerate(ordered_account_codes, start=3):
         source_row = source_data["rows"][account_code]
-        ws.cell(row_idx, 1).value = (
-            int(account_code) if account_code.isdigit() else account_code
-        )
-        ws.cell(row_idx, 2).value = source_data["row_names"].get(
-            account_code, ""
-        )
+        ws.cell(row_idx, 1).value = int(account_code) if account_code.isdigit() else account_code
+        ws.cell(row_idx, 2).value = source_data["row_names"].get(account_code, "")
         total_idx = source_data["subprogram_map"].get("Total")
         total_value = (
             _parse_source_number(source_row[total_idx])
@@ -542,9 +504,7 @@ def _populate_compass(ws: Any, source_data: dict[str, Any]) -> None:
             else None
         )
         ws.cell(row_idx, 3).value = total_value
-        for col_idx, subprogram_code in enumerate(
-            ordered_subprogram_codes, start=4
-        ):
+        for col_idx, subprogram_code in enumerate(ordered_subprogram_codes, start=4):
             source_idx = source_data["subprogram_map"].get(subprogram_code)
             value = (
                 _parse_source_number(source_row[source_idx])
@@ -573,13 +533,9 @@ def _apply_mismatch_highlights(
     source_extra_subprogram_codes: list[str],
 ) -> None:
     master_last_col = (
-        max(master_map["subprogram_map"].values())
-        if master_map["subprogram_map"]
-        else 3
+        max(master_map["subprogram_map"].values()) if master_map["subprogram_map"] else 3
     )
-    master_last_row = (
-        max(master_map["row_map"].values()) if master_map["row_map"] else 5
-    )
+    master_last_row = max(master_map["row_map"].values()) if master_map["row_map"] else 5
 
     for code in missing_master_codes:
         row_idx = master_map["row_map"].get(code)
@@ -609,9 +565,7 @@ def _apply_mismatch_highlights(
         return
 
     ordered_subprogram_codes = [
-        code
-        for code in source_data["subprogram_map"].keys()
-        if code not in {"Total", "EI/SP"}
+        code for code in source_data["subprogram_map"].keys() if code not in {"Total", "EI/SP"}
     ]
     ordered_account_codes = list(source_data["rows"].keys())
     extra_rows = set(missing_source_codes)
@@ -652,9 +606,7 @@ def _insert_source_only_items_openpyxl(
 ) -> dict[str, Any]:
     editable_end = _editable_end_row(ws, protected_start_row)
     master_map = _read_master_layout(ws, editable_end_row=editable_end)
-    total_steps = max(
-        1, len(source_extra_subprogram_codes) + len(missing_source_codes)
-    )
+    total_steps = max(1, len(source_extra_subprogram_codes) + len(missing_source_codes))
     step_index = 0
 
     for code in sorted(source_extra_subprogram_codes, key=_sort_key):
@@ -663,12 +615,8 @@ def _insert_source_only_items_openpyxl(
         _insert_partial_column_openpyxl(ws, insert_col, 1, editable_end)
         _copy_column_format_openpyxl(ws, source_col, insert_col)
         _copy_column_formulas_openpyxl(ws, source_col, insert_col, 1, editable_end)
-        ws.cell(4, insert_col).value = (
-            int(code) if code.isdigit() else code
-        )
-        ws.cell(5, insert_col).value = source_data["subprogram_names"].get(
-            code, ""
-        )
+        ws.cell(4, insert_col).value = int(code) if code.isdigit() else code
+        ws.cell(5, insert_col).value = source_data["subprogram_names"].get(code, "")
         master_map = _read_master_layout(
             ws,
             editable_end_row=_editable_end_row(ws, protected_start_row),
@@ -676,9 +624,7 @@ def _insert_source_only_items_openpyxl(
         step_index += 1
         if progress_callback is not None:
             pct = 35 + int(18 * step_index / total_steps)
-            progress_callback(
-                pct, f"Updating Master sheet... ({step_index}/{total_steps})"
-            )
+            progress_callback(pct, f"Updating Master sheet... ({step_index}/{total_steps})")
 
     for code in sorted(missing_source_codes, key=_sort_key):
         insert_row = _find_insert_row(master_map["row_map"], code)
@@ -688,38 +634,27 @@ def _insert_source_only_items_openpyxl(
         ws.insert_rows(insert_row, 1)
         _copy_row_format_openpyxl(ws, source_row_num, insert_row)
         _copy_row_formulas_openpyxl(ws, source_row_num, insert_row)
-        ws.cell(insert_row, 1).value = (
-            int(code) if code.isdigit() else code
-        )
+        ws.cell(insert_row, 1).value = int(code) if code.isdigit() else code
         ws.cell(insert_row, 2).value = source_data["row_names"].get(code, "")
         master_map = _read_master_layout(
             ws,
             editable_end_row=_editable_end_row(ws, protected_start_row),
         )
-        _set_row_total_formula_openpyxl(
-            ws, insert_row, max(master_map["subprogram_map"].values())
-        )
+        _set_row_total_formula_openpyxl(ws, insert_row, max(master_map["subprogram_map"].values()))
         step_index += 1
         if progress_callback is not None:
             pct = 35 + int(18 * step_index / total_steps)
-            progress_callback(
-                pct, f"Updating Master sheet... ({step_index}/{total_steps})"
-            )
+            progress_callback(pct, f"Updating Master sheet... ({step_index}/{total_steps})")
 
-    return _read_master_layout(
-        ws, editable_end_row=_editable_end_row(ws, protected_start_row)
-    )
+    return _read_master_layout(ws, editable_end_row=_editable_end_row(ws, protected_start_row))
 
 
-def _insert_partial_column_openpyxl(
-    ws: Any, insert_col: int, start_row: int, end_row: int
-) -> None:
+def _insert_partial_column_openpyxl(ws: Any, insert_col: int, start_row: int, end_row: int) -> None:
     if end_row < start_row:
         return
     max_col_before = ws.max_column
     ws.move_range(
-        f"{get_column_letter(insert_col)}{start_row}"
-        f":{get_column_letter(max_col_before)}{end_row}",
+        f"{get_column_letter(insert_col)}{start_row}:{get_column_letter(max_col_before)}{end_row}",
         rows=0,
         cols=1,
         translate=True,
@@ -750,9 +685,7 @@ def _copy_column_formulas_openpyxl(
             ws.cell(row, target_col).value = translated
 
 
-def _copy_row_formulas_openpyxl(
-    ws: Any, source_row: int, target_row: int
-) -> None:
+def _copy_row_formulas_openpyxl(ws: Any, source_row: int, target_row: int) -> None:
     if source_row < 1 or source_row > ws.max_row:
         return
     for col in range(1, ws.max_column + 1):
@@ -768,9 +701,7 @@ def _copy_row_formulas_openpyxl(
             ws.cell(target_row, col).value = translated
 
 
-def _copy_column_format_openpyxl(
-    ws: Any, source_col: int, target_col: int
-) -> None:
+def _copy_column_format_openpyxl(ws: Any, source_col: int, target_col: int) -> None:
     if source_col < 1 or source_col > ws.max_column:
         return
     for row in range(1, ws.max_row + 1):
@@ -781,17 +712,11 @@ def _copy_column_format_openpyxl(
             ws.row_dimensions[row].height = ws.row_dimensions[row].height
     source_letter = get_column_letter(source_col)
     target_letter = get_column_letter(target_col)
-    ws.column_dimensions[target_letter].width = ws.column_dimensions[
-        source_letter
-    ].width
-    ws.column_dimensions[target_letter].hidden = ws.column_dimensions[
-        source_letter
-    ].hidden
+    ws.column_dimensions[target_letter].width = ws.column_dimensions[source_letter].width
+    ws.column_dimensions[target_letter].hidden = ws.column_dimensions[source_letter].hidden
 
 
-def _copy_row_format_openpyxl(
-    ws: Any, source_row: int, target_row: int
-) -> None:
+def _copy_row_format_openpyxl(ws: Any, source_row: int, target_row: int) -> None:
     if source_row < 1 or source_row > ws.max_row:
         return
     for col in range(1, ws.max_column + 1):
@@ -802,9 +727,7 @@ def _copy_row_format_openpyxl(
     ws.row_dimensions[target_row].hidden = ws.row_dimensions[source_row].hidden
 
 
-def _ensure_master_total_formulas_openpyxl(
-    ws: Any, master_map: dict[str, Any]
-) -> None:
+def _ensure_master_total_formulas_openpyxl(ws: Any, master_map: dict[str, Any]) -> None:
     if not master_map["row_map"] or not master_map["subprogram_map"]:
         return
     last_col = max(master_map["subprogram_map"].values())
@@ -812,9 +735,7 @@ def _ensure_master_total_formulas_openpyxl(
         _set_row_total_formula_openpyxl(ws, row_idx, last_col)
 
 
-def _set_row_total_formula_openpyxl(
-    ws: Any, row_idx: int, last_col: int
-) -> None:
+def _set_row_total_formula_openpyxl(ws: Any, row_idx: int, last_col: int) -> None:
     last_col_letter = get_column_letter(last_col)
     ws.cell(row_idx, 3).value = f"=SUM(D{row_idx}:{last_col_letter}{row_idx})"
 
@@ -860,11 +781,7 @@ def _is_retryable_excel_error(exc: Exception) -> bool:  # pragma: no cover
     if args and isinstance(args[0], int) and args[0] in EXCEL_RETRY_HRESULTS:
         return True
     text = " ".join(str(part) for part in args).lower()
-    return (
-        "call was rejected by callee" in text
-        or "server busy" in text
-        or "拒绝接收呼叫" in text
-    )
+    return "call was rejected by callee" in text or "server busy" in text or "拒绝接收呼叫" in text
 
 
 def _call_excel_with_retries(  # pragma: no cover
@@ -1128,16 +1045,10 @@ def _rebind_macro_buttons_excel(  # pragma: no cover
     sheet_count = int(_call_excel_with_retries(lambda: workbook.Sheets.Count))
     for sheet_index in range(1, sheet_count + 1):
         try:
-            sheet = _call_excel_with_retries(
-                lambda idx=sheet_index: workbook.Sheets(idx)
-            )
-            shapes = _call_excel_with_retries(
-                lambda current_sheet=sheet: current_sheet.Shapes
-            )
+            sheet = _call_excel_with_retries(lambda idx=sheet_index: workbook.Sheets(idx))
+            shapes = _call_excel_with_retries(lambda current_sheet=sheet: current_sheet.Shapes)
             shape_count = int(
-                _call_excel_with_retries(
-                    lambda current_shapes=shapes: current_shapes.Count
-                )
+                _call_excel_with_retries(lambda current_shapes=shapes: current_shapes.Count)
             )
         except Exception:
             continue
@@ -1145,9 +1056,7 @@ def _rebind_macro_buttons_excel(  # pragma: no cover
         for index in range(1, shape_count + 1):
             try:
                 shape = _call_excel_with_retries(
-                    lambda idx=index, current_shapes=shapes: current_shapes.Item(
-                        idx
-                    )
+                    lambda idx=index, current_shapes=shapes: current_shapes.Item(idx)
                 )
                 on_action = str(
                     _call_excel_with_retries(
@@ -1187,9 +1096,7 @@ def _rewrite_shape_on_action(
     workbook_part, macro_part = action.rsplit("!", 1)
     workbook_part_lower = workbook_part.lower()
     workbook_match = re.match(r"^'?([^']+?)'?$", workbook_part.strip())
-    normalized_workbook_part = (
-        workbook_match.group(1) if workbook_match else workbook_part.strip()
-    )
+    normalized_workbook_part = workbook_match.group(1) if workbook_match else workbook_part.strip()
     normalized_workbook_lower = normalized_workbook_part.lower()
     for workbook_name in workbook_names:
         workbook_name_lower = workbook_name.lower()
@@ -1230,11 +1137,7 @@ def _read_master_layout_excel(  # pragma: no cover
     subprogram_map: dict[str, int] = {}
     subprogram_names: dict[str, str] = {}
     max_col = int(ws.UsedRange.Columns.Count)
-    max_row = (
-        editable_end_row
-        if editable_end_row is not None
-        else int(ws.UsedRange.Rows.Count)
-    )
+    max_row = editable_end_row if editable_end_row is not None else int(ws.UsedRange.Rows.Count)
     for col in range(4, max_col + 1):
         code = _clean_string(ws.Cells(4, col).Value)
         if code:
@@ -1262,9 +1165,7 @@ def _populate_master_excel(  # pragma: no cover
     progress_callback: ProgressFn | None = None,
 ) -> tuple[int, int]:
     sorted_rows = sorted(master_map["row_map"].items(), key=lambda item: item[1])
-    sorted_cols = sorted(
-        master_map["subprogram_map"].items(), key=lambda item: item[1]
-    )
+    sorted_cols = sorted(master_map["subprogram_map"].items(), key=lambda item: item[1])
     if not sorted_rows or not sorted_cols:
         return 0, 0
 
@@ -1297,9 +1198,7 @@ def _populate_master_excel(  # pragma: no cover
                 row_values.append(value)
             matrix.append(tuple(row_values))
 
-        ws.Range(
-            ws.Cells(first_row, first_col), ws.Cells(last_row, last_col)
-        ).Value = tuple(matrix)
+        ws.Range(ws.Cells(first_row, first_col), ws.Cells(last_row, last_col)).Value = tuple(matrix)
         if progress_callback is not None:
             pct = 58 + int(18 * seg_index / total_segments)
             progress_callback(
@@ -1331,9 +1230,7 @@ def _populate_compass_excel(  # pragma: no cover
     ws.Cells.ClearContents()
 
     ordered_subprogram_codes = [
-        code
-        for code in source_data["subprogram_map"].keys()
-        if code not in {"Total", "EI/SP"}
+        code for code in source_data["subprogram_map"].keys() if code not in {"Total", "EI/SP"}
     ]
     ordered_account_codes = list(source_data["rows"].keys())
 
@@ -1342,19 +1239,11 @@ def _populate_compass_excel(  # pragma: no cover
         header_row_2 = []
         for subprogram_code in ordered_subprogram_codes:
             header_row_1.append(
-                int(subprogram_code)
-                if subprogram_code.isdigit()
-                else subprogram_code
+                int(subprogram_code) if subprogram_code.isdigit() else subprogram_code
             )
-            header_row_2.append(
-                source_data["subprogram_names"].get(subprogram_code, "")
-            )
-        ws.Range(
-            ws.Cells(1, 4), ws.Cells(1, 3 + len(header_row_1))
-        ).Value = (tuple(header_row_1),)
-        ws.Range(
-            ws.Cells(2, 4), ws.Cells(2, 3 + len(header_row_2))
-        ).Value = (tuple(header_row_2),)
+            header_row_2.append(source_data["subprogram_names"].get(subprogram_code, ""))
+        ws.Range(ws.Cells(1, 4), ws.Cells(1, 3 + len(header_row_1))).Value = (tuple(header_row_1),)
+        ws.Range(ws.Cells(2, 4), ws.Cells(2, 3 + len(header_row_2))).Value = (tuple(header_row_2),)
 
     ws.Cells(2, 2).Value = "EI/SP"
     ws.Cells(2, 3).Value = "Total"
@@ -1413,13 +1302,9 @@ def _apply_mismatch_highlights_excel(  # pragma: no cover
     source_extra_subprogram_codes: list[str],
 ) -> None:
     master_last_col = (
-        max(master_map["subprogram_map"].values())
-        if master_map["subprogram_map"]
-        else 3
+        max(master_map["subprogram_map"].values()) if master_map["subprogram_map"] else 3
     )
-    master_last_row = (
-        max(master_map["row_map"].values()) if master_map["row_map"] else 5
-    )
+    master_last_row = max(master_map["row_map"].values()) if master_map["row_map"] else 5
     for code in missing_master_codes:
         row_idx = master_map["row_map"].get(code)
         if row_idx:
@@ -1453,9 +1338,7 @@ def _apply_mismatch_highlights_excel(  # pragma: no cover
         return
 
     ordered_subprogram_codes = [
-        code
-        for code in source_data["subprogram_map"].keys()
-        if code not in {"Total", "EI/SP"}
+        code for code in source_data["subprogram_map"].keys() if code not in {"Total", "EI/SP"}
     ]
     ordered_account_codes = list(source_data["rows"].keys())
     extra_rows = set(missing_source_codes)
@@ -1487,9 +1370,7 @@ def _insert_source_only_items_excel(  # pragma: no cover
 ) -> dict[str, Any]:
     editable_end = _editable_end_row_excel(ws, protected_start_row)
     master_map = _read_master_layout_excel(ws, editable_end_row=editable_end)
-    total_steps = max(
-        1, len(source_extra_subprogram_codes) + len(missing_source_codes)
-    )
+    total_steps = max(1, len(source_extra_subprogram_codes) + len(missing_source_codes))
     step_index = 0
 
     for code in sorted(source_extra_subprogram_codes, key=_sort_key):
@@ -1497,16 +1378,12 @@ def _insert_source_only_items_excel(  # pragma: no cover
         copy_from_col = insert_col - 1 if insert_col > 4 else insert_col + 1
         _insert_partial_column_excel(ws, insert_col, 1, editable_end)
         try:
-            ws.Columns(insert_col).ColumnWidth = ws.Columns(
-                copy_from_col
-            ).ColumnWidth
+            ws.Columns(insert_col).ColumnWidth = ws.Columns(copy_from_col).ColumnWidth
         except Exception:
             pass
         _copy_column_formulas_excel(ws, copy_from_col, insert_col, 1, editable_end)
         ws.Cells(4, insert_col).Value = int(code) if code.isdigit() else code
-        ws.Cells(5, insert_col).Value = source_data["subprogram_names"].get(
-            code, ""
-        )
+        ws.Cells(5, insert_col).Value = source_data["subprogram_names"].get(code, "")
         master_map = _read_master_layout_excel(
             ws,
             editable_end_row=_editable_end_row_excel(ws, protected_start_row),
@@ -1514,9 +1391,7 @@ def _insert_source_only_items_excel(  # pragma: no cover
         step_index += 1
         if progress_callback is not None:
             pct = 42 + int(14 * step_index / total_steps)
-            progress_callback(
-                pct, f"Updating Master sheet... ({step_index}/{total_steps})"
-            )
+            progress_callback(pct, f"Updating Master sheet... ({step_index}/{total_steps})")
 
     for code in sorted(missing_source_codes, key=_sort_key):
         insert_row = _find_insert_row(master_map["row_map"], code)
@@ -1528,24 +1403,18 @@ def _insert_source_only_items_excel(  # pragma: no cover
             ws.Rows(insert_row).RowHeight = ws.Rows(copy_from_row).RowHeight
         except Exception:
             pass
-        _copy_row_formulas_excel(
-            ws, copy_from_row, insert_row, int(ws.UsedRange.Columns.Count)
-        )
+        _copy_row_formulas_excel(ws, copy_from_row, insert_row, int(ws.UsedRange.Columns.Count))
         ws.Cells(insert_row, 1).Value = int(code) if code.isdigit() else code
         ws.Cells(insert_row, 2).Value = source_data["row_names"].get(code, "")
         master_map = _read_master_layout_excel(
             ws,
             editable_end_row=_editable_end_row_excel(ws, protected_start_row),
         )
-        _set_row_total_formula_excel(
-            ws, insert_row, max(master_map["subprogram_map"].values())
-        )
+        _set_row_total_formula_excel(ws, insert_row, max(master_map["subprogram_map"].values()))
         step_index += 1
         if progress_callback is not None:
             pct = 42 + int(14 * step_index / total_steps)
-            progress_callback(
-                pct, f"Updating Master sheet... ({step_index}/{total_steps})"
-            )
+            progress_callback(pct, f"Updating Master sheet... ({step_index}/{total_steps})")
 
     return _read_master_layout_excel(
         ws, editable_end_row=_editable_end_row_excel(ws, protected_start_row)
@@ -1557,9 +1426,7 @@ def _insert_partial_column_excel(  # pragma: no cover
 ) -> None:
     if end_row < start_row:
         return
-    ws.Range(ws.Cells(start_row, insert_col), ws.Cells(end_row, insert_col)).Insert(
-        Shift=-4161
-    )
+    ws.Range(ws.Cells(start_row, insert_col), ws.Cells(end_row, insert_col)).Insert(Shift=-4161)
 
 
 def _copy_column_formulas_excel(  # pragma: no cover
@@ -1574,9 +1441,7 @@ def _copy_column_formulas_excel(  # pragma: no cover
     for row in range(start_row, end_row + 1):
         try:
             if bool(ws.Cells(row, source_col).HasFormula):
-                ws.Cells(row, target_col).FormulaR1C1 = ws.Cells(
-                    row, source_col
-                ).FormulaR1C1
+                ws.Cells(row, target_col).FormulaR1C1 = ws.Cells(row, source_col).FormulaR1C1
         except Exception:
             pass
 
@@ -1589,9 +1454,7 @@ def _copy_row_formulas_excel(  # pragma: no cover
     for col in range(1, int(end_col) + 1):
         try:
             if bool(ws.Cells(source_row, col).HasFormula):
-                ws.Cells(target_row, col).FormulaR1C1 = ws.Cells(
-                    source_row, col
-                ).FormulaR1C1
+                ws.Cells(target_row, col).FormulaR1C1 = ws.Cells(source_row, col).FormulaR1C1
         except Exception:
             pass
 

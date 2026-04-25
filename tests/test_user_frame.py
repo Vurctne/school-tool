@@ -101,10 +101,13 @@ def _build_frame(
     licence_mod.refresh.return_value = licence_status
 
     with (
-        patch.dict("sys.modules", {
-            "toolkit.account": account_mod,
-            "toolkit.licence": licence_mod,
-        }),
+        patch.dict(
+            "sys.modules",
+            {
+                "toolkit.account": account_mod,
+                "toolkit.licence": licence_mod,
+            },
+        ),
     ):
         from toolkit.user_frame import UserFrame  # noqa: PLC0415
 

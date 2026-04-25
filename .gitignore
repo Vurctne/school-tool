@@ -31,6 +31,7 @@ ENV/
 coverage.xml
 htmlcov/
 *.cover
+pytest-cache-files-*/
 
 # PyInstaller
 build_*/
@@ -81,3 +82,10 @@ Samples/
 !tests/**/*.pdf
 !docs/**/*.pdf
 !design_system/**/*.pdf
+
+# Binary archives (design source bundles etc.)
+*.zip
+*.rar
+*.7z
+!tests/**/*.zip
+!docs/**/*.zip

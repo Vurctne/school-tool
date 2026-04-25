@@ -20,7 +20,7 @@ _HELP_TEXT = f"""Master Budget Compass Autofill
 This tool imports a Compass Expense Sub-Program export into your school's \
 Master Budget macro-enabled workbook. It matches account codes between the \
 two files, writes the imported figures into the correct cells, and saves an \
-annotated output workbook\u2014all without opening Excel manually. The name \
+annotated output workbook—all without opening Excel manually. The name \
 "Compass Autofill" reflects exactly what it does: it autofills the Master \
 Budget template from the Compass export.
 
@@ -45,18 +45,18 @@ and button bindings intact.
 
 HIGHLIGHT COLOURS IN THE OUTPUT WORKBOOK
 
-  Pink / red  (#{HL_MISMATCH}) \u2014 Mismatch row or column. An account code or \
+  Pink / red  (#{HL_MISMATCH}) — Mismatch row or column. An account code or \
 sub-program code is present in the Master Budget template but was not found \
 in the Compass export. The imported value for that cell is blank. Review \
 whether the code has been removed or renamed in Compass.
 
-  Green  (#{HL_SOURCE_ONLY}) \u2014 Source-only row or column. An account code or \
+  Green  (#{HL_SOURCE_ONLY}) — Source-only row or column. An account code or \
 sub-program code appears in the Compass export but has no matching row or \
 column in the Master Budget template. The tool has inserted a new row or \
 column into the output workbook for this code. Review whether it should be \
 added to your Master Budget permanently.
 
-  Yellow  (#{HL_EDITED}) \u2014 Edited cell (user convention). Cells you have \
+  Yellow  (#{HL_EDITED}) — Edited cell (user convention). Cells you have \
 manually adjusted in a previous version of the workbook may carry this \
 colour. The tool does not apply or remove this highlight; it is preserved \
 from the template as-is.
@@ -77,11 +77,11 @@ pink.
 
 USING THIS TOOL
 
-  1. Expense Sub-Program file \u2014 click Browse and select the Compass Expense \
+  1. Expense Sub-Program file — click Browse and select the Compass Expense \
 Sub-Program XLSX export for the period you are loading.
-  2. Master Budget template \u2014 click Browse and select your school's Master \
+  2. Master Budget template — click Browse and select your school's Master \
 Budget XLSM workbook (the macro-enabled template, not a previous output).
-  3. Output workbook \u2014 click Browse to choose where the annotated output \
+  3. Output workbook — click Browse to choose where the annotated output \
 will be saved, or click "Create suggested output name" to have the tool \
 generate a timestamped file name in the same folder as the template.
   4. Click "Generate budget workbook". A progress bar will appear while the \
@@ -90,13 +90,13 @@ tool runs. Do not open or modify either input file while the tool is running.
 listing the number of mismatch items. Open the output workbook and review \
 any highlighted rows or columns before distributing.
 
-The tool runs on a background thread\u2014the window remains responsive \
+The tool runs on a background thread—the window remains responsive \
 throughout.
 
 
 SUPPORT
 
-  This tool \u2014 feedback and questions:   Vurctne@gmail.com
+  This tool — feedback and questions:   Vurctne@gmail.com
 
 Please send feedback to Vurctne@gmail.com
 """
@@ -138,11 +138,11 @@ class MasterBudgetTool:
     ]
     # Output workbook is always auto-computed from the Master Budget template
     # path (same folder, ``<stem>_AUTO_<timestamp>.xlsm`` filename). The user
-    # never picks it — keeps the workflow to two clicks: pick Compass export,
+    # never picks it -- keeps the workflow to two clicks: pick Compass export,
     # pick Master Budget, press Generate.
     output = None
 
-    # Per-instance state — the "Open output folder" secondary action reads
+    # Per-instance state -- the "Open output folder" secondary action reads
     # this to know where the last successful run wrote its file.
     _last_output_path: Path | None = None
 
@@ -178,8 +178,18 @@ class MasterBudgetTool:
             )
 
     def _build_result(self, summary: ImportSummary) -> ToolResult:
-        has_issues = bool(summary.mismatch_codes or summary.source_only_codes)
-        mismatch_count = len(summary.mismatch_codes) + len(summary.source_only_codes)
+        has_issues = bool(
+            summary.mismatch_account_codes
+            or summary.mismatch_subprogram_codes
+            or summary.source_only_account_codes
+            or summary.source_only_subprogram_codes
+        )
+        mismatch_count = (
+            len(summary.mismatch_account_codes)
+            + len(summary.mismatch_subprogram_codes)
+            + len(summary.source_only_account_codes)
+            + len(summary.source_only_subprogram_codes)
+        )
 
         # Output filename (not the full path) goes in the banner so the user
         # can see at a glance what was written.
@@ -205,37 +215,56 @@ class MasterBudgetTool:
         log_lines: list[LogLine] = [
             LogLine("IMPORT SUMMARY", tag="heading"),
             LogLine(
-                f"Matched rows: {summary.matched_rows}  |  "
-                f"Matched cells: {summary.matched_cells}",
+                f"Matched rows: {summary.matched_rows}  |  Matched cells: {summary.matched_cells}",
                 tag="ok" if not has_issues else "warning",
             ),
         ]
 
-        if summary.mismatch_codes:
+        if summary.mismatch_account_codes:
             log_lines.append(
                 LogLine(
-                    f"Mismatch codes ({len(summary.mismatch_codes)}) \u2014 "
-                    "in Master Budget but not in Compass export:",
+                    f"Mismatch rows ({len(summary.mismatch_account_codes)}) — "
+                    "account codes in Master Budget but not in Compass export:",
                     tag="heading",
                 )
             )
-            for code in summary.mismatch_codes:
-                log_lines.append(LogLine(f"  {code}", tag="warning"))
+            for code in summary.mismatch_account_codes:
+                log_lines.append(LogLine(f"  {code}", tag="danger"))
 
-        if summary.source_only_codes:
+        if summary.mismatch_subprogram_codes:
             log_lines.append(
                 LogLine(
-                    f"Source-only codes ({len(summary.source_only_codes)}) \u2014 "
-                    "in Compass export but not in Master Budget:",
+                    f"Mismatch columns ({len(summary.mismatch_subprogram_codes)}) — "
+                    "sub-program codes in Master Budget but not in Compass export:",
                     tag="heading",
                 )
             )
-            for code in summary.source_only_codes:
+            for code in summary.mismatch_subprogram_codes:
+                log_lines.append(LogLine(f"  {code}", tag="danger"))
+
+        if summary.source_only_account_codes:
+            log_lines.append(
+                LogLine(
+                    f"Source-only rows ({len(summary.source_only_account_codes)}) — "
+                    "account codes in Compass export but not in Master Budget:",
+                    tag="heading",
+                )
+            )
+            for code in summary.source_only_account_codes:
                 log_lines.append(LogLine(f"  {code}", tag="extra"))
 
-        log_lines.append(
-            LogLine(f"Output: {summary.output_path}", tag="muted")
-        )
+        if summary.source_only_subprogram_codes:
+            log_lines.append(
+                LogLine(
+                    f"Source-only columns ({len(summary.source_only_subprogram_codes)}) — "
+                    "sub-program codes in Compass export but not in Master Budget:",
+                    tag="heading",
+                )
+            )
+            for code in summary.source_only_subprogram_codes:
+                log_lines.append(LogLine(f"  {code}", tag="extra"))
+
+        log_lines.append(LogLine(f"Output: {summary.output_path}", tag="muted"))
 
         return ToolResult(
             status=status,  # type: ignore[arg-type]
@@ -248,7 +277,7 @@ class MasterBudgetTool:
     def secondary_actions(self) -> list[tuple[str, Callable[..., None]]]:
         # Output naming is automatic, so the old "Create suggested output name"
         # button is gone. "Open output folder" is the one useful action after
-        # a successful run — it opens Explorer (Windows) / Finder (macOS) /
+        # a successful run -- it opens Explorer (Windows) / Finder (macOS) /
         # xdg-open (Linux) at the folder, selecting the generated file.
         return [("Open output folder", self._open_output_folder)]
 
@@ -257,11 +286,11 @@ class MasterBudgetTool:
         import subprocess
         import sys
 
-        # Tk may be absent in CI — guard the messagebox import so this method
+        # Tk may be absent in CI -- guard the messagebox import so this method
         # stays callable (headless unit tests exercise it too).
         try:
             import tkinter.messagebox as mb
-        except ImportError:  # pragma: no cover — Tk absent (CI)
+        except ImportError:  # pragma: no cover -- Tk absent (CI)
             mb = None  # type: ignore[assignment]
 
         path = self._last_output_path
@@ -272,7 +301,7 @@ class MasterBudgetTool:
                         "Open output folder",
                         "No output file yet. Click Generate budget workbook first.",
                     )
-                except Exception:  # pragma: no cover — Tk absent (CI)
+                except Exception:  # pragma: no cover -- Tk absent (CI)
                     pass
             return
 
@@ -283,14 +312,16 @@ class MasterBudgetTool:
                 # Windows: open Explorer with the generated file highlighted.
                 # Note: ``explorer /select,<path>`` exits with code 1 on
                 # success (Windows quirk), so we do not check the return code.
-                subprocess.Popen(["explorer", f"/select,{path}"])  # noqa: S603,S607
+                # Pass as a single string so explorer's own parser handles the
+                # quoting correctly for paths with spaces (e.g. OneDrive paths).
+                subprocess.Popen(f'explorer /select,"{path}"')  # noqa: S603,S607
             elif sys.platform == "darwin":
                 # macOS: -R reveals the file in Finder.
                 subprocess.Popen(["open", "-R", str(path)])  # noqa: S603,S607
             else:
                 # Linux and other Unix: open the folder in the default manager.
                 subprocess.Popen(["xdg-open", str(folder)])  # noqa: S603,S607
-        except Exception as exc:  # pragma: no cover — defensive
+        except Exception as exc:  # pragma: no cover -- defensive
             if mb is not None:
                 try:
                     mb.showerror(

@@ -49,8 +49,8 @@ _STATE_LABELS: dict[str, str] = {
     "invoice_issued": "Invoice issued",
     "po_uploaded": "PO uploaded",
     "under_review": "Under review",
-    "active": "Active",        # extended below with date
-    "grace": "Expired",        # extended below with grace info
+    "active": "Active",  # extended below with date
+    "grace": "Expired",  # extended below with grace info
     "expired": "Expired",
 }
 
@@ -253,21 +253,46 @@ class UserFrame(tk.Frame):
         err_frame.pack(fill="x")
 
         # Email
-        email_lbl = tk.Label(container, text="Email", bg=tokens.BG_MUTED, fg=tokens.FG_1,
-                              font=_font(tokens.FS_13), anchor="w")
+        email_lbl = tk.Label(
+            container,
+            text="Email",
+            bg=tokens.BG_MUTED,
+            fg=tokens.FG_1,
+            font=_font(tokens.FS_13),
+            anchor="w",
+        )
         email_lbl.pack(fill="x")
         email_var = tk.StringVar()
-        email_entry = tk.Entry(container, textvariable=email_var, font=_font(tokens.FS_13),
-                               fg=tokens.FG_1, relief="sunken", bd=1)
+        email_entry = tk.Entry(
+            container,
+            textvariable=email_var,
+            font=_font(tokens.FS_13),
+            fg=tokens.FG_1,
+            relief="sunken",
+            bd=1,
+        )
         email_entry.pack(fill="x", pady=(0, tokens.SP_2))
 
         # Password
-        pw_lbl = tk.Label(container, text="Password", bg=tokens.BG_MUTED, fg=tokens.FG_1,
-                           font=_font(tokens.FS_13), anchor="w")
+        pw_lbl = tk.Label(
+            container,
+            text="Password",
+            bg=tokens.BG_MUTED,
+            fg=tokens.FG_1,
+            font=_font(tokens.FS_13),
+            anchor="w",
+        )
         pw_lbl.pack(fill="x")
         pw_var = tk.StringVar()
-        pw_entry = tk.Entry(container, textvariable=pw_var, show="●",
-                            font=_font(tokens.FS_13), fg=tokens.FG_1, relief="sunken", bd=1)
+        pw_entry = tk.Entry(
+            container,
+            textvariable=pw_var,
+            show="●",
+            font=_font(tokens.FS_13),
+            fg=tokens.FG_1,
+            relief="sunken",
+            bd=1,
+        )
         pw_entry.pack(fill="x", pady=(0, tokens.SP_2))
 
         # Buttons
@@ -299,8 +324,7 @@ class UserFrame(tk.Frame):
         def _show_err(msg: str) -> None:
             for w in err_frame.winfo_children():
                 w.destroy()
-            Banner(err_frame, level="danger", text=msg).pack(fill="x",
-                                                              pady=(0, tokens.SP_2))
+            Banner(err_frame, level="danger", text=msg).pack(fill="x", pady=(0, tokens.SP_2))
 
         def _clear_err() -> None:
             for w in err_frame.winfo_children():
@@ -337,9 +361,9 @@ class UserFrame(tk.Frame):
                 request_password_reset(email)
                 for w in err_frame.winfo_children():
                     w.destroy()
-                Banner(err_frame, level="ok",
-                       text="Password reset email sent. Check your inbox.").pack(
-                    fill="x", pady=(0, tokens.SP_2))
+                Banner(
+                    err_frame, level="ok", text="Password reset email sent. Check your inbox."
+                ).pack(fill="x", pady=(0, tokens.SP_2))
             except Exception as exc:
                 _show_err(f"Could not send reset email: {exc}")
 
@@ -375,27 +399,36 @@ class UserFrame(tk.Frame):
         def _reg_err(msg: str) -> None:
             for w in reg_err_frame.winfo_children():
                 w.destroy()
-            Banner(reg_err_frame, level="danger", text=msg).pack(fill="x",
-                                                                   pady=(0, tokens.SP_2))
+            Banner(reg_err_frame, level="danger", text=msg).pack(fill="x", pady=(0, tokens.SP_2))
 
         def _reg_ok(msg: str) -> None:
             for w in reg_err_frame.winfo_children():
                 w.destroy()
-            Banner(reg_err_frame, level="ok", text=msg).pack(fill="x",
-                                                              pady=(0, tokens.SP_2))
+            Banner(reg_err_frame, level="ok", text=msg).pack(fill="x", pady=(0, tokens.SP_2))
 
-        def _lbl_entry(parent: tk.Frame, text: str,
-                       var: tk.StringVar, show: str = "") -> tk.Entry:
-            tk.Label(parent, text=text, bg=tokens.BG_MUTED, fg=tokens.FG_1,
-                     font=_font(tokens.FS_13), anchor="w").pack(fill="x")
-            entry = tk.Entry(parent, textvariable=var, show=show,
-                             font=_font(tokens.FS_13), fg=tokens.FG_1,
-                             relief="sunken", bd=1)
+        def _lbl_entry(parent: tk.Frame, text: str, var: tk.StringVar, show: str = "") -> tk.Entry:
+            tk.Label(
+                parent,
+                text=text,
+                bg=tokens.BG_MUTED,
+                fg=tokens.FG_1,
+                font=_font(tokens.FS_13),
+                anchor="w",
+            ).pack(fill="x")
+            entry = tk.Entry(
+                parent,
+                textvariable=var,
+                show=show,
+                font=_font(tokens.FS_13),
+                fg=tokens.FG_1,
+                relief="sunken",
+                bd=1,
+            )
             entry.pack(fill="x", pady=(0, tokens.SP_2))
             return entry
 
-        reg_email_var = email_var   # reuse the email from the outer form
-        reg_pw_var = pw_var         # reuse password too
+        reg_email_var = email_var  # reuse the email from the outer form
+        reg_pw_var = pw_var  # reuse password too
 
         confirm_pw_var = tk.StringVar()
         _lbl_entry(confirm_frame, "Confirm password", confirm_pw_var, show="●")
@@ -441,9 +474,7 @@ class UserFrame(tk.Frame):
                 from toolkit.account import register
 
                 register(email, password, first, last, school, abn)
-                _reg_ok(
-                    "Check your inbox \u2014 click the verification link, then sign back in."
-                )
+                _reg_ok("Check your inbox \u2014 click the verification link, then sign back in.")
                 create_btn.configure(state="disabled")
             except Exception as exc:
                 _reg_err(f"Registration failed: {exc}")
@@ -456,13 +487,25 @@ class UserFrame(tk.Frame):
         acct = self._account
 
         def _ro(label: str, value: str) -> None:
-            tk.Label(parent, text=label, bg=tokens.BG_MUTED, fg=tokens.FG_1,
-                     font=_font(tokens.FS_13), anchor="w").pack(fill="x")
+            tk.Label(
+                parent,
+                text=label,
+                bg=tokens.BG_MUTED,
+                fg=tokens.FG_1,
+                font=_font(tokens.FS_13),
+                anchor="w",
+            ).pack(fill="x")
             var = tk.StringVar(value=value)
-            entry = tk.Entry(parent, textvariable=var, state="readonly",
-                             readonlybackground=tokens.BG_READONLY,
-                             font=_font(tokens.FS_13), fg=tokens.FG_1,
-                             relief="sunken", bd=1)
+            entry = tk.Entry(
+                parent,
+                textvariable=var,
+                state="readonly",
+                readonlybackground=tokens.BG_READONLY,
+                font=_font(tokens.FS_13),
+                fg=tokens.FG_1,
+                relief="sunken",
+                bd=1,
+            )
             entry.pack(fill="x", pady=(0, tokens.SP_2))
 
         _ro("Email", acct.email or "")
@@ -496,14 +539,12 @@ class UserFrame(tk.Frame):
         def _show_err(msg: str) -> None:
             for w in err_frame.winfo_children():
                 w.destroy()
-            Banner(err_frame, level="danger", text=msg).pack(fill="x",
-                                                              pady=(0, tokens.SP_2))
+            Banner(err_frame, level="danger", text=msg).pack(fill="x", pady=(0, tokens.SP_2))
 
         def _show_ok(msg: str) -> None:
             for w in err_frame.winfo_children():
                 w.destroy()
-            Banner(err_frame, level="ok", text=msg).pack(fill="x",
-                                                          pady=(0, tokens.SP_2))
+            Banner(err_frame, level="ok", text=msg).pack(fill="x", pady=(0, tokens.SP_2))
 
         def _toggle_change_pw() -> None:
             if cpw_frame.winfo_ismapped():
@@ -520,14 +561,28 @@ class UserFrame(tk.Frame):
         new_pw_var = tk.StringVar()
         confirm_new_pw_var = tk.StringVar()
 
-        for lbl_text, var in [("Current password", old_pw_var),
-                               ("New password", new_pw_var),
-                               ("Confirm new password", confirm_new_pw_var)]:
-            tk.Label(cpw_frame, text=lbl_text, bg=tokens.BG_MUTED, fg=tokens.FG_1,
-                     font=_font(tokens.FS_13), anchor="w").pack(fill="x")
-            tk.Entry(cpw_frame, textvariable=var, show="●",
-                     font=_font(tokens.FS_13), fg=tokens.FG_1,
-                     relief="sunken", bd=1).pack(fill="x", pady=(0, tokens.SP_2))
+        for lbl_text, var in [
+            ("Current password", old_pw_var),
+            ("New password", new_pw_var),
+            ("Confirm new password", confirm_new_pw_var),
+        ]:
+            tk.Label(
+                cpw_frame,
+                text=lbl_text,
+                bg=tokens.BG_MUTED,
+                fg=tokens.FG_1,
+                font=_font(tokens.FS_13),
+                anchor="w",
+            ).pack(fill="x")
+            tk.Entry(
+                cpw_frame,
+                textvariable=var,
+                show="●",
+                font=_font(tokens.FS_13),
+                fg=tokens.FG_1,
+                relief="sunken",
+                bd=1,
+            ).pack(fill="x", pady=(0, tokens.SP_2))
 
         save_btn = ttk.Button(cpw_frame, text="Save password", style="Accent.TButton")
         save_btn.pack(anchor="w", pady=(tokens.SP_1, tokens.SP_2))
@@ -600,16 +655,21 @@ class UserFrame(tk.Frame):
         pill_text, pill_level = self._licence_pill(lic)
         pill_row = tk.Frame(body, bg=tokens.BG_MUTED)
         pill_row.pack(fill="x", pady=(0, tokens.SP_2))
-        tk.Label(pill_row, text="Status:", bg=tokens.BG_MUTED, fg=tokens.FG_1,
-                 font=_font(tokens.FS_13), anchor="w").pack(side="left",
-                                                             padx=(0, tokens.SP_2))
+        tk.Label(
+            pill_row,
+            text="Status:",
+            bg=tokens.BG_MUTED,
+            fg=tokens.FG_1,
+            font=_font(tokens.FS_13),
+            anchor="w",
+        ).pack(side="left", padx=(0, tokens.SP_2))
 
         pill_styles = {
-            "ok":      {"bg": tokens.OK_BG,     "fg": tokens.OK_FG},
-            "warning": {"bg": tokens.WARN_BG,   "fg": tokens.WARN_FG},
-            "danger":  {"bg": tokens.DANGER_BG, "fg": tokens.DANGER_FG},
-            "info":    {"bg": tokens.INFO_BG,   "fg": tokens.INFO_FG},
-            "neutral": {"bg": tokens.BG_INSET,  "fg": tokens.FG_2},
+            "ok": {"bg": tokens.OK_BG, "fg": tokens.OK_FG},
+            "warning": {"bg": tokens.WARN_BG, "fg": tokens.WARN_FG},
+            "danger": {"bg": tokens.DANGER_BG, "fg": tokens.DANGER_FG},
+            "info": {"bg": tokens.INFO_BG, "fg": tokens.INFO_FG},
+            "neutral": {"bg": tokens.BG_INSET, "fg": tokens.FG_2},
         }
         ps = pill_styles.get(pill_level, pill_styles["neutral"])
         self._status_pill_lbl = tk.Label(
@@ -625,18 +685,35 @@ class UserFrame(tk.Frame):
         self._status_pill_lbl.pack(side="left")
 
         # Bound devices list
-        tk.Label(body, text="Devices:", bg=tokens.BG_MUTED, fg=tokens.FG_1,
-                 font=_font(tokens.FS_13, "bold"), anchor="w").pack(
-            fill="x", pady=(tokens.SP_2, tokens.SP_1))
+        tk.Label(
+            body,
+            text="Devices:",
+            bg=tokens.BG_MUTED,
+            fg=tokens.FG_1,
+            font=_font(tokens.FS_13, "bold"),
+            anchor="w",
+        ).pack(fill="x", pady=(tokens.SP_2, tokens.SP_1))
 
         devices: list[str] = list(lic.devices) if lic.devices else []
         if devices:
             for dev in devices:
-                tk.Label(body, text=f"\u2022  {dev}", bg=tokens.BG_MUTED, fg=tokens.FG_2,
-                         font=_font(tokens.FS_13), anchor="w").pack(fill="x")
+                tk.Label(
+                    body,
+                    text=f"\u2022  {dev}",
+                    bg=tokens.BG_MUTED,
+                    fg=tokens.FG_2,
+                    font=_font(tokens.FS_13),
+                    anchor="w",
+                ).pack(fill="x")
         else:
-            tk.Label(body, text="No devices registered.", bg=tokens.BG_MUTED,
-                     fg=tokens.FG_MUTED, font=_font(tokens.FS_13), anchor="w").pack(fill="x")
+            tk.Label(
+                body,
+                text="No devices registered.",
+                bg=tokens.BG_MUTED,
+                fg=tokens.FG_MUTED,
+                font=_font(tokens.FS_13),
+                anchor="w",
+            ).pack(fill="x")
 
         # Action buttons (M2 stubs)
         btn_row = tk.Frame(body, bg=tokens.BG_MUTED)
@@ -648,38 +725,43 @@ class UserFrame(tk.Frame):
         def _coming_m4(action: str) -> None:
             for w in stub_banner_frame.winfo_children():
                 w.destroy()
-            Banner(stub_banner_frame, level="info",
-                   text=f"{action} \u2014 coming in M4.").pack(
-                fill="x", pady=(tokens.SP_1, 0))
+            Banner(stub_banner_frame, level="info", text=f"{action} \u2014 coming in M4.").pack(
+                fill="x", pady=(tokens.SP_1, 0)
+            )
 
         state = lic.state
 
         if state in ("none", "invoice_issued"):
             ttk.Button(
-                btn_row, text="Generate annual invoice",
+                btn_row,
+                text="Generate annual invoice",
                 command=lambda: _coming_m4("Generate annual invoice"),
             ).pack(side="left", padx=(0, tokens.SP_2))
 
         if state == "invoice_issued":
             ttk.Button(
-                btn_row, text="Download invoice",
+                btn_row,
+                text="Download invoice",
                 command=lambda: _coming_m4("Download invoice"),
             ).pack(side="left", padx=(0, tokens.SP_2))
 
         if state in ("invoice_issued", "po_uploaded", "under_review"):
             ttk.Button(
-                btn_row, text="Upload signed PO",
+                btn_row,
+                text="Upload signed PO",
                 command=lambda: _coming_m4("Upload signed PO"),
             ).pack(side="left", padx=(0, tokens.SP_2))
 
         ttk.Button(
-            btn_row, text="Refresh licence",
+            btn_row,
+            text="Refresh licence",
             command=self._do_refresh_licence,
         ).pack(side="left", padx=(0, tokens.SP_2))
 
         if state == "active":
             ttk.Button(
-                btn_row, text="Renew licence",
+                btn_row,
+                text="Renew licence",
                 command=lambda: _coming_m4("Renew licence"),
             ).pack(side="left")
 
@@ -730,13 +812,18 @@ class UserFrame(tk.Frame):
         self._invoices_section = outer
 
         columns = [
-            {"key": "number",    "label": "Number",         "width": 120},
-            {"key": "issue_date","label": "Issue date",     "width": 90},
-            {"key": "period",    "label": "Period",         "width": 150},
-            {"key": "total",     "label": "Total inc GST",  "width": 100, "align": "right",
-             "mono": True},
-            {"key": "status",    "label": "Status",         "width": 80},
-            {"key": "download",  "label": "Download",       "width": 80},
+            {"key": "number", "label": "Number", "width": 120},
+            {"key": "issue_date", "label": "Issue date", "width": 90},
+            {"key": "period", "label": "Period", "width": 150},
+            {
+                "key": "total",
+                "label": "Total inc GST",
+                "width": 100,
+                "align": "right",
+                "mono": True,
+            },
+            {"key": "status", "label": "Status", "width": 80},
+            {"key": "download", "label": "Download", "width": 80},
         ]
 
         col_ids = [str(c["key"]) for c in columns]
@@ -827,7 +914,8 @@ class UserFrame(tk.Frame):
         for w in self._error_banner_frame.winfo_children():
             w.destroy()
         Banner(self._error_banner_frame, level="danger", text=message).pack(
-            fill="x", pady=(0, tokens.SP_2))
+            fill="x", pady=(0, tokens.SP_2)
+        )
 
     def _clear_error(self) -> None:
         for w in self._error_banner_frame.winfo_children():

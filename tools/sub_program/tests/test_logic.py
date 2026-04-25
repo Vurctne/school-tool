@@ -6,6 +6,7 @@ from pathlib import Path
 import openpyxl
 import pytest
 
+from toolkit.tokens import HL_MISMATCH
 from tools.sub_program.logic import (
     ReportSummary,
     SubProgramLine,
@@ -20,8 +21,7 @@ from tools.sub_program.logic import (
 # ---------------------------------------------------------------------------
 
 _SAMPLE_PDF = Path(
-    "Samples/Annual Subprogram Budget Report/"
-    "GL21157_Annual Subprogram budget report.pdf"
+    "Samples/Annual Subprogram Budget Report/GL21157_Annual Subprogram budget report.pdf"
 )
 
 
@@ -251,8 +251,11 @@ class TestGenerateReport:
             progress=lambda p, m: None,
         )
 
-        if not summary.over_budget_lines:
-            pytest.skip("No over-budget lines in sample PDF")
+        assert summary.over_budget_lines, (
+            "Sample PDF must contain at least one over-budget line -- if the "
+            "sample is replaced, replace it with one that has at least one "
+            "over-budget row, or this test is no longer meaningful."
+        )
 
         wb = openpyxl.load_workbook(output)
         ws = wb.active
@@ -264,11 +267,72 @@ class TestGenerateReport:
             if str(cell_val) == over_sp:
                 fill = ws.cell(row_idx, 1).fill  # type: ignore[union-attr]
                 if fill and fill.fgColor and fill.fgColor.rgb:
-                    # HL_MISMATCH = "F4CCCC"; openpyxl stores as "FFF4CCCC"
-                    found_fill = "F4CCCC" in fill.fgColor.rgb.upper()
+                    # openpyxl stores as "FF<hex>" (alpha-prefixed)
+                    found_fill = HL_MISMATCH in fill.fgColor.rgb.upper()
                     if found_fill:
                         break
         assert found_fill, "Over-budget row should have HL_MISMATCH fill"
+
+    def test_over_budget_fill_all_columns(self, tmp_path: Path) -> None:
+        """Every non-empty cell in an over-budget row must carry the HL_MISMATCH fill.
+
+        The original `test_over_budget_fill_present` only inspected column 1;
+        a partial-fill regression (only some columns highlighted) would slip
+        past it. This test sweeps every populated cell on the over-budget row
+        and asserts the fill fingerprint matches `FF{HL_MISMATCH}`.
+        """
+        output = tmp_path / "output_all_cols.xlsx"
+
+        summary = generate_report(
+            report_file=_SAMPLE_PDF,
+            comments_file=None,
+            output_file=output,
+            progress=lambda p, m: None,
+        )
+
+        assert summary.over_budget_lines, (
+            "Sample PDF must contain at least one over-budget line for this "
+            "test to be meaningful -- replace the sample if it ever stops "
+            "having any."
+        )
+
+        wb = openpyxl.load_workbook(output)
+        ws = wb.active
+        over_line = summary.over_budget_lines[0]
+        over_sp = over_line.sub_program
+        over_account = over_line.account
+        target_argb = ("FF" + HL_MISMATCH).upper()
+
+        # Find the row(s) matching the over-budget sub-program AND account section.
+        # A sub-program may appear in both Revenue and Expenditure rows; we must
+        # pin to the specific account section that is actually over-budget.
+        target_rows: list[int] = []
+        for row_idx in range(2, (ws.max_row or 2) + 1):  # type: ignore[union-attr]
+            cell_val = ws.cell(row_idx, 1).value  # type: ignore[union-attr]
+            acct_val = ws.cell(row_idx, 2).value  # type: ignore[union-attr]
+            if str(cell_val) == over_sp and str(acct_val) == over_account:
+                target_rows.append(row_idx)
+
+        assert target_rows, (
+            f"No row found in output for over-budget sub-program {over_sp!r}; test setup is broken."
+        )
+
+        # Every populated cell on the target row must have the canonical fill.
+        for row_idx in target_rows:
+            for col_idx in range(1, (ws.max_column or 1) + 1):  # type: ignore[union-attr]
+                cell = ws.cell(row_idx, col_idx)  # type: ignore[union-attr]
+                if cell.value in (None, ""):
+                    continue
+                fill = cell.fill
+                assert fill and fill.fgColor and fill.fgColor.rgb, (
+                    f"Cell ({row_idx}, {col_idx}) on over-budget row {over_sp!r} "
+                    "has no fill colour."
+                )
+                assert target_argb in fill.fgColor.rgb.upper(), (
+                    f"Cell ({row_idx}, {col_idx}) on over-budget row "
+                    f"{over_sp!r} has fill {fill.fgColor.rgb!r}, expected "
+                    f"{target_argb!r}."
+                )
 
     def test_commentary_joined(self, tmp_path: Path) -> None:
         comments_xlsx = _make_comments_xlsx(tmp_path)
