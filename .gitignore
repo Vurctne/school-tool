@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment files
+.env
+.env.*
+
+# Testing / linting caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.cover
+
+# PyInstaller
+build_*/
+*.spec.bak
+
+# MSIX staging
+msix/staging/
+msix/output/
+packaging/staging/
+packaging/output/
+*.msix
+*.appx
+
+# Windows artifacts
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# macOS (developer machines)
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE / editors
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+*.log
+logs/
+
+# Compiled assets / generated
+toolkit/tokens.py.bak
+
+# Real customer data — never commit
+# Samples/ contains real-school exports per CLAUDE.md current-state snapshot.
+# Tests use synthetic fixtures and live under tests/, so allow-list those.
+Samples/
+*.xlsx
+*.xlsm
+*.csv
+*.pdf
+!tests/**/*.xlsx
+!tests/**/*.xlsm
+!tests/**/*.csv
+!tests/**/*.pdf
+!docs/**/*.pdf
+!design_system/**/*.pdf

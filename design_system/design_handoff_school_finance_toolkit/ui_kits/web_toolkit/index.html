@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web toolkit · Vic School Finance Toolkit</title>
+<link rel="stylesheet" href="../../colors_and_type.css">
+<style>
+  html,body{margin:0;padding:0;background:#f0eee9;}
+  body{font-family:var(--font-sans);color:var(--fg-1);}
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="../desktop_app/design-canvas.jsx"></script>
+<script type="text/babel" src="shell.jsx"></script>
+<script type="text/babel" src="tool-master-budget.jsx"></script>
+<script type="text/babel" src="tool-srp.jsx"></script>
+<script type="text/babel" src="tool-camps.jsx"></script>
+<script type="text/babel" src="tool-operating.jsx"></script>
+<script type="text/babel" src="tool-subprogram.jsx"></script>
+<script type="text/babel">
+  const W = 1440, H = 960;
+
+  function Frame({ active, children }) {
+    return (
+      <div style={{
+        width: W, height: H, overflow: "hidden",
+        background: "var(--bg-app)",
+        boxShadow: "0 12px 32px -8px rgba(16,24,40,.16), 0 2px 6px -2px rgba(16,24,40,.08)",
+        borderRadius: 10, border: "1px solid var(--border-subtle)",
+      }}>
+        <Shell activeId={active}>{children}</Shell>
+      </div>
+    );
+  }
+
+  function Root() {
+    return (
+      <DesignCanvas>
+        <DCSection id="toolkit" title="Vic School Finance Toolkit — web" subtitle="One shell, five tools. Left rail switches between them; each tool has its own work-area flow.">
+          <DCArtboard id="mb"      label="1 · Master Budget — review"           width={W} height={H}><Frame active="master-budget"><MasterBudgetScreen variant="review" /></Frame></DCArtboard>
+          <DCArtboard id="srp"     label="2 · SRP Comparison"                   width={W} height={H}><Frame active="srp"><SrpScreen /></Frame></DCArtboard>
+          <DCArtboard id="sp"      label="3 · Annual Sub-Program Report"        width={W} height={H}><Frame active="sub-program"><SubProgramScreen /></Frame></DCArtboard>
+          <DCArtboard id="camps"   label="4 · Camps / Activities Reconciliation" width={W} height={H}><Frame active="camps"><CampsScreen /></Frame></DCArtboard>
+          <DCArtboard id="os"      label="5 · Operating Statement"              width={W} height={H}><Frame active="operating"><OpstatScreen /></Frame></DCArtboard>
+        </DCSection>
+      </DesignCanvas>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+</script>
+</body>
+</html>

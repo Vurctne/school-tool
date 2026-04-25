@@ -1,0 +1,87 @@
+name = "sft-api"
+main = "src/index.ts"
+compatibility_date = "2026-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ── D1 (SQLite) ──────────────────────────────────────────────────────────────
+# Run `wrangler d1 create sft` on your machine and paste the returned
+# database_id below before deploying.
+[[d1_databases]]
+binding = "DB"
+database_name = "sft"
+database_id = "<placeholder — run: wrangler d1 create sft>"
+
+# ── R2 (object storage) ───────────────────────────────────────────────────────
+# Run `wrangler r2 bucket create sft-assets` before deploying.
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "sft-assets"
+
+# ── AI binding ────────────────────────────────────────────────────────────────
+[ai]
+binding = "AI"
+
+# ── Cron triggers ─────────────────────────────────────────────────────────────
+# Fires at 15:00 UTC = 01:00 AEST (nightly renewal reminder emails).
+[triggers]
+crons = ["0 15 * * *"]
+
+# ── Queue producer (M4 PO upload) ─────────────────────────────────────────────
+# Run `wrangler queues create sft-ocr` before deploying.
+[[queues.producers]]
+binding = "OCR_QUEUE"
+queue = "sft-ocr"
+
+# ── Queue consumer (M5 OCR pipeline) ─────────────────────────────────────────
+# Uncomment when the OCR consumer Worker is ready (M5).
+# [[queues.consumers]]
+# queue = "sft-ocr"
+# max_batch_size = 10
+
+# ── Static vars (non-secret) ──────────────────────────────────────────────────
+[vars]
+PRICING_CENTS_SUBTOTAL = 55000
+GST_RATE = "0.10"
+PRICING_CENTS_TOTAL = 60500
+PRODUCT_NAME = "School Tool"
+SELLER_NAME = "ZXW Investment Pty Ltd"
+SELLER_ABN_TBD = "true"
+SUPPORT_EMAIL = "Vurctne@gmail.com"
+LICENCE_DAYS = 365
+
+# ── Custom domain routes ──────────────────────────────────────────────────────
+# Uncomment the block below once `schooltool.com.au` is live in Cloudflare
+# (see docs/05_DOMAIN_SETUP.md). Then `npx wrangler deploy`.
+#
+# [[routes]]
+# pattern = "api.schooltool.com.au/*"
+# zone_name = "schooltool.com.au"
+# custom_domain = true
+#
+# The admin dashboard (M4) gets its own Worker with its own route:
+# admin.schooltool.com.au/* → sft-admin Worker (not yet created).
+
+# ── Secrets (never in wrangler.toml — use `wrangler secret put <NAME>`) ───────
+# JWT_SECRET_USER              — HS256 key for user JWTs (90-day)
+# JWT_SECRET_ADMIN             — HS256 key for admin JWTs (30-min)
+# ADMIN_PASSWORD_ARGON2_HASH   — Argon2id hash of the admin password
+# ADMIN_TOTP_SECRET            — base32 TOTP secret (otpauth://totp/...)
+# LICENCE_SIGNING_PRIVATE_KEY_ED25519 — base64-encoded Ed25519 private key
+# RESEND_API_KEY               — transactional email via Resend
+
+# ── Preview environment ───────────────────────────────────────────────────────
+# Uncomment and populate for a separate preview Worker.
+# [env.preview]
+# name = "sft-api-preview"
+# vars = { PRODUCT_NAME = "School Tool (Preview)" }
+# # Override D1/R2 bindings with preview resources:
+# # [[env.preview.d1_databases]]
+# # binding = "DB"
+# # database_name = "sft-preview"
+# # database_id = "<preview-db-id>"
+
+# ── Production environment ────────────────────────────────────────────────────
+# Uncomment and populate for explicit production config (custom domain etc).
+# [env.production]
+# name = "sft-api"
+# # routes = [{ pattern = "api.schooltool.com.au/*", zone_name = "schooltool.com.au" }]

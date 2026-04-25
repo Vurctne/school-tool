@@ -1,0 +1,9 @@
+node_modules/
+.wrangler/
+dist/
+.env*
+*.log
+.DS_Store
+
+# vitest ephemeral compile artifacts (leak when the runner is killed mid-run)
+vitest.config.ts.timestamp-*.mjs

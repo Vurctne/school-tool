@@ -1,0 +1,34 @@
+School Tool — Proprietary Software License
+============================================
+
+Copyright (c) 2026 ZXW Investment Pty Ltd (trading as Vurctne).
+All rights reserved.
+
+This source code is published for transparency and the convenience of
+licensed customers, security researchers, and independent reviewers. It
+is NOT released under an open-source license.
+
+You MAY:
+  - Read this source code.
+  - Reference design patterns, ADRs, or testing approaches in your own
+    work, with credit.
+  - Submit pull requests or bug reports (subject to the contributor
+    terms in CONTRIBUTING.md, if present).
+  - Use this software, in compiled form, only under a paid annual
+    licence purchased from ZXW Investment Pty Ltd or its authorised
+    distributors (Microsoft Store).
+
+You MAY NOT, without prior written permission from ZXW Investment Pty Ltd:
+  - Compile, redistribute, or host a derivative version of this
+    software, in whole or in part.
+  - Remove or alter copyright notices, licensing notices, or telemetry.
+  - Use this code, in source or compiled form, in any product or
+    service offered for sale or as part of a competing tool.
+  - Use the names "School Tool", "Vurctne", or "Vurctne Games" except
+    to refer to the original software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+For licensing inquiries: contact@vurctne.com

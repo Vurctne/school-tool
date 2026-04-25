@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Vurctne monogram mark. Scalable. Source of truth for MSIX tile art. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 1000" width="1000" height="1000">
+  <title>Vurctne mark</title>
+  <desc>Navy rounded square with a white V monogram.</desc>
+  <rect x="0" y="0" width="1000" height="1000" rx="157" ry="157" fill="#185787"/>
+  <path d="M 260 243 L 500 800 L 740 243"
+        fill="none"
+        stroke="#FFFFFF"
+        stroke-width="100"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+</svg>

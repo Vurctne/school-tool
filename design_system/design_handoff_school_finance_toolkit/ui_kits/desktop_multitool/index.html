@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Desktop multi-tool · School Finance Toolkit v2</title>
+<link rel="stylesheet" href="../../colors_and_type.css">
+<style>
+  html,body{margin:0;padding:0;background:#f0eee9;font-family:'Segoe UI',Inter,system-ui,sans-serif;color:#1A1D21;}
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" src="../desktop_app/design-canvas.jsx"></script>
+<script type="text/babel" src="tk-primitives.jsx"></script>
+<script type="text/babel" src="tk-shell.jsx"></script>
+<script type="text/babel" src="tk-tools.jsx"></script>
+<script type="text/babel">
+  const W = 1200, H = 820;
+
+  function Frame({ active, title, status, children }) {
+    return (
+      <TkWindow title={title} width={W} height={H}>
+        <TkRail active={active} />
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
+          {children}
+          <TkStatusBar left={status} />
+        </div>
+      </TkWindow>
+    );
+  }
+
+  function Root() {
+    return (
+      <DesignCanvas>
+        <DCSection id="v2" title="School Finance Toolkit v2 — multi-tool Tkinter app" subtitle="Option A: extend the existing Master Budget app with a left-rail tool picker. Five ttk.Frames share one window. Same installer, same stack.">
+          <DCArtboard id="mb"    label="1 · Master Budget — warning state"       width={W} height={H}>
+            <Frame active="master-budget" title="School Finance Toolkit v2.0.0 — Master Budget" status="Completed with 3 mismatch item(s)">
+              <TkMasterBudget />
+            </Frame>
+          </DCArtboard>
+          <DCArtboard id="srp"   label="2 · SRP Comparison"                       width={W} height={H}>
+            <Frame active="srp" title="School Finance Toolkit v2.0.0 — SRP Comparison" status="Comparison ready">
+              <TkSrp />
+            </Frame>
+          </DCArtboard>
+          <DCArtboard id="sp"    label="3 · Annual Sub-Program Report"            width={W} height={H}>
+            <Frame active="sub-program" title="School Finance Toolkit v2.0.0 — Sub-Program Report" status="Report ready · 1 over budget">
+              <TkSubProgram />
+            </Frame>
+          </DCArtboard>
+          <DCArtboard id="camps" label="4 · Camps / Activities Reconciliation"    width={W} height={H}>
+            <Frame active="camps" title="School Finance Toolkit v2.0.0 — Camps / Activities" status="Completed with 2 open items">
+              <TkCamps />
+            </Frame>
+          </DCArtboard>
+          <DCArtboard id="os"    label="5 · Operating Statement"                   width={W} height={H}>
+            <Frame active="operating" title="School Finance Toolkit v2.0.0 — Operating Statement" status="Completed — no variances outside threshold">
+              <TkOpstat />
+            </Frame>
+          </DCArtboard>
+        </DCSection>
+      </DesignCanvas>
+    );
+  }
+
+  ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
+</script>
+</body>
+</html>

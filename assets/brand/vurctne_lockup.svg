@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Full Vurctne lockup: mark + wordmark + tagline. Use for website, email signatures, invoice header. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 400" width="1400" height="400">
+  <title>Vurctne lockup</title>
+  <desc>Vurctne monogram next to the Vurctne wordmark in Source Serif 4 and a muted sans-serif tagline.</desc>
+  <rect x="40" y="40" width="320" height="320" rx="50" ry="50" fill="#185787"/>
+  <path d="M 126 118 L 200 290 L 274 118"
+        fill="none"
+        stroke="#FFFFFF"
+        stroke-width="32"
+        stroke-linecap="round"
+        stroke-linejoin="round"/>
+  <text x="420" y="230"
+        fill="#185787"
+        font-family="Source Serif 4, Source Serif Pro, Georgia, serif"
+        font-weight="600"
+        font-size="170"
+        letter-spacing="-2">Vurctne</text>
+  <text x="420" y="290"
+        fill="#6B737D"
+        font-family="Aptos, Segoe UI, system-ui, sans-serif"
+        font-size="26"
+        letter-spacing="2.3"
+        style="text-transform: uppercase;">SCHOOL FINANCE TOOLS</text>
+</svg>

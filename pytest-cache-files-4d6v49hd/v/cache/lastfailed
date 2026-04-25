@@ -1,0 +1,5 @@
+{
+  "tools/master_budget/tests/test_frame.py::TestSecondaryActions::test_returns_suggest_output_name_action": true,
+  "tools/master_budget/tests/test_frame.py::TestSecondaryActions::test_suggest_output_is_callable_with_no_args": true,
+  "tools/master_budget/tests/test_frame.py::TestSecondaryActions::test_secondary_actions_is_empty": true
+}

@@ -1,0 +1,118 @@
+# -*- mode: python ; coding: utf-8 -*-
+# PyInstaller onedir spec — School Tool v2.0.0
+# Run:  pyinstaller packaging/SchoolTool.spec --noconfirm --clean
+
+import os
+import sys
+
+# ---------------------------------------------------------------------------
+# Paths — all relative to SPECPATH so no absolute paths leak into the bundle.
+# ---------------------------------------------------------------------------
+_base = os.path.abspath(SPECPATH)  # noqa: F821  (SPECPATH injected by PyInstaller)
+_root = os.path.dirname(_base) if os.path.basename(_base) == "packaging" else _base
+
+# ---------------------------------------------------------------------------
+# Hidden imports
+# ---------------------------------------------------------------------------
+_hidden = [
+    # GUI
+    "tkinter",
+    "tkinter.ttk",
+    "tkinter.font",
+    "tkinter.filedialog",
+    "tkinter.messagebox",
+    # Spreadsheet
+    "openpyxl",
+    # PDF parsing
+    "pdfplumber",
+    "pdfplumber.table",
+    "pdfplumber.page",
+    # Image handling (Pillow — pdfplumber dependency)
+    "PIL",
+    # HTTP (licence/registration calls)
+    "httpx",
+    # Date utilities
+    "dateutil",
+]
+
+# Windows-only pywin32 modules (safe to include unconditionally — PyInstaller
+# on non-Windows will skip binaries that don't exist).
+_hidden += [
+    "win32crypt",
+    "win32api",
+    "pythoncom",
+]
+
+# ---------------------------------------------------------------------------
+# Collected submodules / data
+# ---------------------------------------------------------------------------
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files  # noqa: E402
+
+_hidden += collect_submodules("openpyxl")
+_hidden += collect_submodules("pdfplumber")
+
+_extra_datas = []
+_extra_datas += collect_data_files("openpyxl")
+_extra_datas += collect_data_files("pdfplumber")
+
+# ---------------------------------------------------------------------------
+# Application data bundles
+# ---------------------------------------------------------------------------
+_datas = [
+    # HYIA transfer spec PDF — opened by the Instructions button
+    (os.path.join(_root, "resources"), "resources"),
+    # Vurctne publisher tiles — bundled for the in-app About panel
+    (os.path.join(_root, "assets", "brand"), os.path.join("assets", "brand")),
+]
+_datas += _extra_datas
+
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
+a = Analysis(  # noqa: F821  (Analysis injected by PyInstaller)
+    [os.path.join(_root, "app.py")],
+    pathex=[_root],
+    binaries=[],
+    datas=_datas,
+    hiddenimports=_hidden,
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=[],
+    noarchive=False,
+    optimize=0,
+)
+
+pyz = PYZ(a.pure)  # noqa: F821
+
+exe = EXE(  # noqa: F821
+    pyz,
+    a.scripts,
+    [],
+    exclude_binaries=True,
+    name="School Tool v2.0.0",
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    console=False,
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    # PyInstaller accepts PNG on Windows 10+; .ico conversion deferred.
+    icon=os.path.join(_root, "msix", "staging", "Assets", "Square150x150Logo.png"),
+    codesign_identity=None,
+    entitlements_file=None,
+)
+
+coll = COLLECT(  # noqa: F821
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    # Output folder: dist/School Tool v2.0.0/
+    name="School Tool v2.0.0",
+)
