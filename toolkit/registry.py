@@ -17,6 +17,8 @@ def all_tools() -> list[type[BaseTool]]:
     # Import every tool package so its __init__.py's register(...) call fires.
     import tools.hyia  # noqa: F401
     import tools.master_budget  # noqa: F401
+    import tools.operating  # noqa: F401
+    import tools.srp  # noqa: F401
     import tools.sub_program  # noqa: F401
 
     return sorted(_registered, key=lambda c: (c.group, c.order, c.label))

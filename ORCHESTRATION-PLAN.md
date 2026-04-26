@@ -1,9 +1,35 @@
 # ORCHESTRATION-PLAN.md
 
 **Created:** 2026-04-25
+**Last revised:** 2026-04-26 (phase reordering — see notice below)
 **Author:** Opus 4.7 orchestrator (no sub-agent dispatch — planning phase)
-**Scope:** the **remaining** work in the project. Already-completed work (M1, the auth tier of M2, the bulk of M3) is *not* re-orchestrated; it stays as committed in `efd8270` baseline.
+**Scope:** the **remaining** work in the project. Already-completed work (M1, the auth tier of M2, the bulk of M3) is *not* re-orchestrated; it stays as committed in `c95097c` baseline.
 **Pre-existing structure honoured:** `docs/03_ROADMAP.md` already specifies the Sonnet 4.6 sub-agent + parallel/serial work-package model. This plan operationalises it — same milestones, explicit dispatch contracts.
+
+---
+
+## ⚠ Phase reordering notice (2026-04-26)
+
+After Phase 2 deployment (sft-api.mfiking.workers.dev live), Ivan made a strategic pivot:
+
+1. **Defer M4 + M5 + M6** (invoice PDF / admin / OCR / Store submission). Reason: pricing model change from "$550/year per school per tool licence" to a **credit-based model** (1/5/10 credit packs at $39/$185/$350 ex GST, 1 credit per paid tool per school per year, no expiry, credits owned by school). Documented canonically in [`docs/06_PRICING.md`](docs/06_PRICING.md). Building M4 against the soon-to-be-obsolete per-licence pricing would be wasted work.
+2. **Workers Paid Plan upgrade ($5/mo) postponed** — `@react-pdf/renderer` exceeds the Free-plan 3 MB gzip bundle limit, but the upgrade is gated on payment-flow rebuild anyway. See `handoff/phase3_paused_m4_research.md` for full disco-2 research that informs the eventual M4 resume.
+3. **Build all remaining tools first** before revisiting payment infrastructure.
+
+Old Phase 3 (M4 build) is now **paused**. Replaced by:
+
+| Old plan order | New plan order | Status |
+| --- | --- | --- |
+| Phase 3 (M4 build) | (paused — resumes as new Phase 5) | `handoff/phase3_paused_m4_research.md` |
+| Phase 4 (M5 OCR) | (paused — resumes as new Phase 6) | — |
+| Phase 5 (M6 Store) | (paused — resumes as new Phase 7) | — |
+| Phase 6 (M7 SRP + Operating Statement) | **new Phase 3** | active next |
+| Phase 7 (M8 Camps) | **new Phase 4** | blocked-on-samples |
+| —— | new Phase 5 (M4 build with credits) | unblocked when new Phase 3 + 4 done |
+| —— | new Phase 6 (M5 OCR) | unblocked when new Phase 5 done |
+| —— | new Phase 7 (M6 Store submit) | unblocked when new Phase 6 done |
+
+The phase **content** (work packages, sub-agents, acceptance criteria) below is unchanged — only the order changes. When M4 resumes as new Phase 5, its brief will be revised to reflect credit-pricing per `docs/06_PRICING.md` §9 migration notes; until then read its old §A.Phase-3 spec as historical reference, not as the next-up brief.
 
 ---
 
@@ -16,7 +42,7 @@
 **Goal:** clear the 4-bucket in-flight queue from `PROJECT-INVENTORY.md §6` so M3 is genuinely shippable. Three real bugs + 4 unfinished tests + 2 cosmetic follow-ups.
 
 **Inputs:**
-- `efd8270` baseline (already-done M3 work)
+- `c95097c` baseline (already-done M3 work)
 - `handoff/phase1_drift_map.md` + `handoff/phase3_final_report.md` — last-round context
 - The 3 bug diagnoses I posted earlier in this session (root causes + proposed fixes).
 
@@ -370,7 +396,7 @@ Updated **on the same commit** that introduces phase work. Single-source-of-trut
   - Tester: N
   - Code-reviewer: N
   - Fixer: N
-- Commits since baseline `efd8270`: N
+- Commits since baseline `c95097c`: N
 - External fetches (OCR / web): N
 - Estimated tokens consumed: ~N (orchestrator + sub-agents combined; rough)
 
@@ -401,7 +427,7 @@ Updated **on the same commit** that introduces phase work. Single-source-of-trut
 
 ## G. What this plan deliberately does NOT do
 
-- Does not re-orchestrate already-completed work (M1, the auth tier of M2, the bulk of M3). That work stays in `efd8270`.
+- Does not re-orchestrate already-completed work (M1, the auth tier of M2, the bulk of M3). That work stays in `c95097c`.
 - Does not change milestone definitions in `docs/03_ROADMAP.md`. Milestones remain canonical; this plan is the operational dispatch model on top.
 - Does not assign sub-agent tokens to research / planning. Step 1-4 of the reorg are orchestrator-only by user instruction.
 - Does not lock the PDF rendering decision, sample-data acquisition, or store identity — those remain Ivan-side decisions surfaced as escalations.
