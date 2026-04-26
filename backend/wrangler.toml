@@ -9,7 +9,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "sft"
-database_id = "<placeholder — run: wrangler d1 create sft>"
+database_id = "d39a34c5-4247-40ec-be19-bcc914bcd4fe"
 
 # ── R2 (object storage) ───────────────────────────────────────────────────────
 # Run `wrangler r2 bucket create sft-assets` before deploying.
@@ -27,10 +27,17 @@ binding = "AI"
 crons = ["0 15 * * *"]
 
 # ── Queue producer (M4 PO upload) ─────────────────────────────────────────────
-# Run `wrangler queues create sft-ocr` before deploying.
-[[queues.producers]]
-binding = "OCR_QUEUE"
-queue = "sft-ocr"
+# DEFERRED to M5. Cloudflare Queues requires Workers Paid Plan ($5/mo); not
+# enabled this round. Phase 2 backend code does not call OCR_QUEUE.send(), so
+# this binding can stay commented without any runtime impact. When M5 enables
+# the OCR pipeline:
+#   1. Enable Workers Paid Plan in the Cloudflare dashboard.
+#   2. Run `wrangler queues create sft-ocr`.
+#   3. Uncomment the block below + the consumer block further down.
+#   4. `wrangler deploy`.
+# [[queues.producers]]
+# binding = "OCR_QUEUE"
+# queue = "sft-ocr"
 
 # ── Queue consumer (M5 OCR pipeline) ─────────────────────────────────────────
 # Uncomment when the OCR consumer Worker is ready (M5).

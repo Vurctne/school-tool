@@ -13,9 +13,23 @@ import {
   insertEmailToken,
   consumeEmailToken,
   logAdminEvent,
+  insertInvoice,
+  findInvoiceById,
+  countInvoicesIssuedInYear,
+  insertPurchaseOrder,
+  findPurchaseOrderById,
+  insertLicence,
+  findLicenceById,
+  upsertLicenceDevice,
+  listLicenceDevicesByLicence,
+  deleteLicenceDevice,
   type NewUserRow,
   type NewSchoolRow,
   type NewEmailTokenRow,
+  type NewInvoiceRow,
+  type NewPurchaseOrderRow,
+  type NewLicenceRow,
+  type NewLicenceDeviceRow,
 } from "../src/lib/db";
 import { now, addDays } from "../src/lib/time";
 import { ulid } from "../src/lib/ids";
@@ -396,5 +410,276 @@ describe("db helpers", () => {
     expect(res.status).toBe(200);
     const body = await res.json<{ ok: boolean }>();
     expect(body.ok).toBe(true);
+  });
+
+  // ── 13. insertInvoice / findInvoiceById ───────────────────────────────────
+  describe("insertInvoice / findInvoiceById", () => {
+    it("round-trips a row and applies default currency + status", async () => {
+      const row: NewInvoiceRow = {
+        id: ulid("inv"),
+        number: `SFT-2026-${Date.now() % 100000}`,
+        school_id: schoolId,
+        user_id: userId,
+        issue_date: "2026-06-01",
+        due_date: "2026-06-30",
+        period_start: "2026-06-01",
+        period_end: "2027-05-31",
+        subtotal_cents: 55000,
+        gst_cents: 5500,
+        total_cents: 60500,
+        // currency and status intentionally omitted → should default to 'AUD' / 'issued'
+        r2_key: `invoices/${ulid("inv")}.pdf`,
+        created_at: now(),
+      };
+      await insertInvoice(db(), row);
+
+      const found = await findInvoiceById(db(), row.id);
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe(row.id);
+      expect(found!.total_cents).toBe(60500);
+      expect(found!.currency).toBe("AUD");
+      expect(found!.status).toBe("issued");
+    });
+
+    it("returns null for an unknown id", async () => {
+      const result = await findInvoiceById(db(), "inv_DOESNOTEXIST");
+      expect(result).toBeNull();
+    });
+  });
+
+  // ── 14. countInvoicesIssuedInYear ─────────────────────────────────────────
+  describe("countInvoicesIssuedInYear", () => {
+    it("returns 0 when no invoices exist for the year", async () => {
+      const count = await countInvoicesIssuedInYear(db(), 2099);
+      expect(count).toBe(0);
+    });
+
+    it("counts only invoices in the target year", async () => {
+      // Insert 2 invoices in 2030 and 1 in 2031
+      const base: Omit<NewInvoiceRow, "id" | "number" | "issue_date" | "r2_key"> = {
+        school_id: schoolId,
+        user_id: userId,
+        due_date: "2030-06-30",
+        period_start: "2030-06-01",
+        period_end: "2031-05-31",
+        subtotal_cents: 55000,
+        gst_cents: 5500,
+        total_cents: 60500,
+        created_at: now(),
+      };
+
+      const seq = Date.now() % 100000;
+      for (let i = 0; i < 2; i++) {
+        const id = ulid("inv");
+        await insertInvoice(db(), {
+          ...base,
+          id,
+          number: `SFT-2030-${seq + i}`,
+          issue_date: "2030-05-15",
+          r2_key: `invoices/${id}.pdf`,
+        });
+      }
+
+      const idOther = ulid("inv");
+      await insertInvoice(db(), {
+        ...base,
+        id: idOther,
+        number: `SFT-2031-${seq + 99}`,
+        issue_date: "2031-05-15",
+        due_date: "2031-06-30",
+        period_start: "2031-06-01",
+        period_end: "2032-05-31",
+        r2_key: `invoices/${idOther}.pdf`,
+      });
+
+      const count2030 = await countInvoicesIssuedInYear(db(), 2030);
+      expect(count2030).toBeGreaterThanOrEqual(2);
+
+      const count2031 = await countInvoicesIssuedInYear(db(), 2031);
+      expect(count2031).toBeGreaterThanOrEqual(1);
+
+      // 2030 and 2031 counts must differ (the 2031 row doesn't inflate 2030)
+      expect(count2031).toBeLessThan(count2030 + 10); // sanity bound
+    });
+  });
+
+  // ── 15. insertPurchaseOrder / findPurchaseOrderById ───────────────────────
+  describe("insertPurchaseOrder / findPurchaseOrderById", () => {
+    it("round-trips a row with required fields and applies default status", async () => {
+      const row: NewPurchaseOrderRow = {
+        id: ulid("po"),
+        invoice_id: null,
+        uploaded_by: userId,
+        original_filename: "po_sample.pdf",
+        r2_key: `pos/${ulid("po")}.pdf`,
+        // status intentionally omitted → should default to 'uploaded'
+        created_at: now(),
+      };
+      await insertPurchaseOrder(db(), row);
+
+      const found = await findPurchaseOrderById(db(), row.id);
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe(row.id);
+      expect(found!.original_filename).toBe("po_sample.pdf");
+      expect(found!.status).toBe("uploaded");
+      expect(found!.invoice_id).toBeNull();
+      expect(found!.ocr_raw).toBeNull();
+    });
+
+    it("returns null for an unknown id", async () => {
+      const result = await findPurchaseOrderById(db(), "po_DOESNOTEXIST");
+      expect(result).toBeNull();
+    });
+  });
+
+  // ── 16. insertLicence / findLicenceById ───────────────────────────────────
+  describe("insertLicence / findLicenceById", () => {
+    it("round-trips a row; features is returned as raw JSON string", async () => {
+      const featuresJson = JSON.stringify(["sub_program"]);
+      const row: NewLicenceRow = {
+        id: ulid("lic"),
+        school_id: schoolId,
+        invoice_id: null,
+        po_id: null,
+        source: "admin_grant",
+        issued_at: now(),
+        expires_at: addDays(now(), 365),
+        features: featuresJson,
+      };
+      await insertLicence(db(), row);
+
+      const found = await findLicenceById(db(), row.id);
+      expect(found).not.toBeNull();
+      expect(found!.id).toBe(row.id);
+      expect(found!.source).toBe("admin_grant");
+      expect(found!.features).toBe(featuresJson);
+      expect(found!.revoked_at).toBeNull();
+    });
+
+    it("returns null for an unknown id", async () => {
+      const result = await findLicenceById(db(), "lic_DOESNOTEXIST");
+      expect(result).toBeNull();
+    });
+  });
+
+  // ── 17. upsertLicenceDevice ───────────────────────────────────────────────
+  describe("upsertLicenceDevice", () => {
+    it("inserts on first call; updates last_seen/os_info but preserves first_seen on second call", async () => {
+      // Set up a parent licence
+      const licId = ulid("lic");
+      await insertLicence(db(), {
+        id: licId,
+        school_id: schoolId,
+        source: "admin_grant",
+        issued_at: now(),
+        expires_at: addDays(now(), 365),
+        features: JSON.stringify(["sub_program"]),
+      });
+
+      const deviceId = `dev_${Date.now()}`;
+      const firstSeen = now() - 100;
+      const firstRow: NewLicenceDeviceRow = {
+        licence_id: licId,
+        device_id: deviceId,
+        first_seen: firstSeen,
+        last_seen: firstSeen,
+        os_info: "Windows 11",
+        app_version: "2.0.0",
+      };
+      await upsertLicenceDevice(db(), firstRow);
+
+      // First call: row should exist with first_seen = firstSeen
+      const devices1 = await listLicenceDevicesByLicence(db(), licId);
+      expect(devices1).toHaveLength(1);
+      expect(devices1[0].first_seen).toBe(firstSeen);
+      expect(devices1[0].last_seen).toBe(firstSeen);
+
+      // Second call: update last_seen and os_info
+      const laterSeen = now();
+      const updateRow: NewLicenceDeviceRow = {
+        licence_id: licId,
+        device_id: deviceId,
+        first_seen: laterSeen, // this value must NOT overwrite the stored first_seen
+        last_seen: laterSeen,
+        os_info: "Windows 11 23H2",
+        app_version: "2.0.1",
+      };
+      await upsertLicenceDevice(db(), updateRow);
+
+      const devices2 = await listLicenceDevicesByLicence(db(), licId);
+      expect(devices2).toHaveLength(1);
+      // first_seen preserved from original insert
+      expect(devices2[0].first_seen).toBe(firstSeen);
+      // last_seen updated
+      expect(devices2[0].last_seen).toBe(laterSeen);
+      expect(devices2[0].os_info).toBe("Windows 11 23H2");
+      expect(devices2[0].app_version).toBe("2.0.1");
+    });
+  });
+
+  // ── 18. listLicenceDevicesByLicence ──────────────────────────────────────
+  describe("listLicenceDevicesByLicence", () => {
+    it("returns empty array for an unknown licence id", async () => {
+      const result = await listLicenceDevicesByLicence(db(), "lic_DOESNOTEXIST");
+      expect(result).toHaveLength(0);
+    });
+
+    it("returns multiple devices ordered by last_seen DESC", async () => {
+      const licId = ulid("lic");
+      await insertLicence(db(), {
+        id: licId,
+        school_id: schoolId,
+        source: "purchase",
+        issued_at: now(),
+        expires_at: addDays(now(), 365),
+        features: JSON.stringify(["sub_program"]),
+      });
+
+      const t1 = now() - 200;
+      const t2 = now() - 100;
+      const t3 = now();
+
+      const devRows: NewLicenceDeviceRow[] = [
+        { licence_id: licId, device_id: "dev_A", first_seen: t1, last_seen: t1 },
+        { licence_id: licId, device_id: "dev_B", first_seen: t2, last_seen: t2 },
+        { licence_id: licId, device_id: "dev_C", first_seen: t3, last_seen: t3 },
+      ];
+
+      for (const r of devRows) {
+        await upsertLicenceDevice(db(), r);
+      }
+
+      const result = await listLicenceDevicesByLicence(db(), licId);
+      expect(result).toHaveLength(3);
+      // Should be DESC by last_seen: C, B, A
+      expect(result[0].device_id).toBe("dev_C");
+      expect(result[1].device_id).toBe("dev_B");
+      expect(result[2].device_id).toBe("dev_A");
+    });
+  });
+
+  // ── 19. deleteLicenceDevice ───────────────────────────────────────────────
+  describe("deleteLicenceDevice", () => {
+    it("removes one device and leaves others intact", async () => {
+      const licId = ulid("lic");
+      await insertLicence(db(), {
+        id: licId,
+        school_id: schoolId,
+        source: "admin_grant",
+        issued_at: now(),
+        expires_at: addDays(now(), 365),
+        features: JSON.stringify(["sub_program"]),
+      });
+
+      const t = now();
+      await upsertLicenceDevice(db(), { licence_id: licId, device_id: "dev_X", first_seen: t, last_seen: t });
+      await upsertLicenceDevice(db(), { licence_id: licId, device_id: "dev_Y", first_seen: t, last_seen: t });
+
+      await deleteLicenceDevice(db(), licId, "dev_X");
+
+      const remaining = await listLicenceDevicesByLicence(db(), licId);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].device_id).toBe("dev_Y");
+    });
   });
 });

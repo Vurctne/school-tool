@@ -143,6 +143,63 @@ export interface AdminEventRow {
   at: number;
 }
 
+export interface NewInvoiceRow {
+  id: string;
+  number: string;
+  school_id: string;
+  user_id: string;
+  issue_date: string;        // 'YYYY-MM-DD'
+  due_date: string;
+  period_start: string;
+  period_end: string;
+  subtotal_cents: number;
+  gst_cents: number;
+  total_cents: number;
+  currency?: string;          // default 'AUD' if omitted
+  status?: string;            // default 'issued' if omitted
+  r2_key: string;
+  created_at: number;        // unix seconds
+}
+
+export interface NewPurchaseOrderRow {
+  id: string;
+  invoice_id: string | null;
+  uploaded_by: string;
+  original_filename: string;
+  r2_key: string;
+  ocr_raw?: string | null;
+  extracted?: string | null;
+  form_template?: string | null;
+  match_score?: number | null;
+  status?: string;            // default 'uploaded'
+  rejection_reason?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: number | null;
+  created_at: number;
+}
+
+export interface NewLicenceRow {
+  id: string;
+  school_id: string;
+  invoice_id?: string | null;
+  po_id?: string | null;
+  source: string;             // 'purchase' | 'admin_grant' | 'admin_extend'
+  issued_at: number;
+  expires_at: number;
+  features: string;           // JSON-encoded array, e.g. JSON.stringify(['sub_program'])
+  revoked_at?: number | null;
+  revoked_reason?: string | null;
+}
+
+export interface NewLicenceDeviceRow {
+  licence_id: string;
+  device_id: string;
+  first_seen: number;
+  last_seen: number;
+  os_info?: string | null;
+  app_version?: string | null;
+}
+
 // ── User queries ──────────────────────────────────────────────────────────────
 
 export async function findUserByEmail(
@@ -361,5 +418,196 @@ export async function logAdminEvent(
        VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .bind(actor, action, entityType, entityId, stringifyJson(payload), nowSeconds)
+    .run();
+}
+
+// ── Invoice helpers ───────────────────────────────────────────────────────────
+
+export async function insertInvoice(
+  db: D1Database,
+  row: NewInvoiceRow,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO invoices
+         (id, number, school_id, user_id, issue_date, due_date,
+          period_start, period_end, subtotal_cents, gst_cents,
+          total_cents, currency, status, r2_key, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.id,
+      row.number,
+      row.school_id,
+      row.user_id,
+      row.issue_date,
+      row.due_date,
+      row.period_start,
+      row.period_end,
+      row.subtotal_cents,
+      row.gst_cents,
+      row.total_cents,
+      row.currency ?? "AUD",
+      row.status ?? "issued",
+      row.r2_key,
+      row.created_at,
+    )
+    .run();
+}
+
+export async function findInvoiceById(
+  db: D1Database,
+  id: string,
+): Promise<InvoiceRow | null> {
+  return db
+    .prepare("SELECT * FROM invoices WHERE id = ?")
+    .bind(id)
+    .first<InvoiceRow>();
+}
+
+export async function countInvoicesIssuedInYear(
+  db: D1Database,
+  year: number,
+): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COUNT(*) AS cnt FROM invoices WHERE issue_date LIKE ?`,
+    )
+    .bind(`${year}-%`)
+    .first<{ cnt: number }>();
+  return row?.cnt ?? 0;
+}
+
+// ── Purchase order helpers ────────────────────────────────────────────────────
+
+export async function insertPurchaseOrder(
+  db: D1Database,
+  row: NewPurchaseOrderRow,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO purchase_orders
+         (id, invoice_id, uploaded_by, original_filename, r2_key,
+          ocr_raw, extracted, form_template, match_score,
+          status, rejection_reason, reviewed_by, reviewed_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.id,
+      row.invoice_id,
+      row.uploaded_by,
+      row.original_filename,
+      row.r2_key,
+      row.ocr_raw ?? null,
+      row.extracted ?? null,
+      row.form_template ?? null,
+      row.match_score ?? null,
+      row.status ?? "uploaded",
+      row.rejection_reason ?? null,
+      row.reviewed_by ?? null,
+      row.reviewed_at ?? null,
+      row.created_at,
+    )
+    .run();
+}
+
+export async function findPurchaseOrderById(
+  db: D1Database,
+  id: string,
+): Promise<PurchaseOrderRow | null> {
+  return db
+    .prepare("SELECT * FROM purchase_orders WHERE id = ?")
+    .bind(id)
+    .first<PurchaseOrderRow>();
+}
+
+// ── Licence helpers ───────────────────────────────────────────────────────────
+
+export async function insertLicence(
+  db: D1Database,
+  row: NewLicenceRow,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO licences
+         (id, school_id, invoice_id, po_id, source,
+          issued_at, expires_at, features, revoked_at, revoked_reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      row.id,
+      row.school_id,
+      row.invoice_id ?? null,
+      row.po_id ?? null,
+      row.source,
+      row.issued_at,
+      row.expires_at,
+      row.features,
+      row.revoked_at ?? null,
+      row.revoked_reason ?? null,
+    )
+    .run();
+}
+
+export async function findLicenceById(
+  db: D1Database,
+  id: string,
+): Promise<LicenceRow | null> {
+  return db
+    .prepare("SELECT * FROM licences WHERE id = ?")
+    .bind(id)
+    .first<LicenceRow>();
+}
+
+// ── Licence device helpers ────────────────────────────────────────────────────
+
+export async function upsertLicenceDevice(
+  db: D1Database,
+  row: NewLicenceDeviceRow,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO licence_devices
+         (licence_id, device_id, first_seen, last_seen, os_info, app_version)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(licence_id, device_id) DO UPDATE
+         SET last_seen    = excluded.last_seen,
+             os_info      = excluded.os_info,
+             app_version  = excluded.app_version`,
+    )
+    .bind(
+      row.licence_id,
+      row.device_id,
+      row.first_seen,
+      row.last_seen,
+      row.os_info ?? null,
+      row.app_version ?? null,
+    )
+    .run();
+}
+
+export async function listLicenceDevicesByLicence(
+  db: D1Database,
+  licenceId: string,
+): Promise<LicenceDeviceRow[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM licence_devices WHERE licence_id = ? ORDER BY last_seen DESC`,
+    )
+    .bind(licenceId)
+    .all<LicenceDeviceRow>();
+  return result.results;
+}
+
+export async function deleteLicenceDevice(
+  db: D1Database,
+  licenceId: string,
+  deviceId: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM licence_devices WHERE licence_id = ? AND device_id = ?`,
+    )
+    .bind(licenceId, deviceId)
     .run();
 }

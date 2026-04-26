@@ -89,3 +89,39 @@ export async function sendApprovalEmail(
     `,
   });
 }
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export async function sendLicenceExtendedEmail(
+  env: Bindings,
+  to: string,
+  newExpiresAt: number,
+  daysAdded: number,
+  reason: string,
+): Promise<void> {
+  const newExpiresDate = new Date(newExpiresAt * 1000).toLocaleDateString(
+    "en-AU",
+    { year: "numeric", month: "long", day: "numeric" },
+  );
+  const safeReason = escapeHtml(reason);
+  await sendEmail(env, {
+    from: `School Tool <${env.SUPPORT_EMAIL}>`,
+    to: [to],
+    subject: "Your School Tool licence has been extended",
+    html: `
+      <p>Hello,</p>
+      <p>Good news — your School Tool licence has been extended by <strong>${daysAdded}</strong> day(s).</p>
+      <p>Your licence is now active until <strong>${newExpiresDate}</strong>.</p>
+      <p>Reason: ${safeReason}</p>
+      <p>If you have questions, reply to this email.</p>
+      <p>— The School Tool team</p>
+    `,
+  });
+}

@@ -89,3 +89,6 @@ Samples/
 *.7z
 !tests/**/*.zip
 !docs/**/*.zip
+
+# Keypair script backups
+*.bak
