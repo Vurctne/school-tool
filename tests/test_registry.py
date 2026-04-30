@@ -32,6 +32,12 @@ class _StubTool:
     def secondary_actions(self) -> list[tuple[str, Callable[..., None]]]:
         return []
 
+    def clear(self) -> None:
+        return None
+
+    def preview_update(self, key: str, value: float | str) -> None:
+        return None
+
 
 class _AnotherStubTool(_StubTool):
     id: str = "another-stub"
@@ -97,7 +103,8 @@ def test_register_order_preserved() -> None:
 def test_register_does_not_affect_other_tools_in_registry() -> None:
     """Registering a new tool must not remove previously registered tools."""
     register(_StubTool)
-    before_count = len(_registered)
+    before = list(_registered)
     register(_AnotherStubTool)
     assert _StubTool in _registered
-    assert len(_registered) == before_count + 1
+    assert _AnotherStubTool in _registered
+    assert len(_registered) == len(before) + 1

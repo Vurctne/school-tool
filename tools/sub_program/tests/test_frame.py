@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from toolkit.base_tool import FileInput, OutputSpec
+from toolkit.base_tool import FileInput, RangeInput
 from toolkit.tokens import HL_MISMATCH
 from tools.sub_program.frame import SubProgramBudgetReportTool
-from tools.sub_program.logic import ReportSummary, SubProgramLine
+from tools.sub_program.logic import ReportSummary, SubProgramLine  # noqa: F401 -- used in new tests
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,9 +57,19 @@ def _make_summary(
     if output_path is None:
         output_path = Path("/tmp/output.xlsx")
     faculty_counts: dict[str, int] = {}
+    faculty_budget: dict[str, Decimal] = {}
+    faculty_ytd: dict[str, Decimal] = {}
     for ln in lines:
         key = ln.faculty or "Unknown"
         faculty_counts[key] = faculty_counts.get(key, 0) + 1
+        faculty_budget[key] = faculty_budget.get(key, Decimal("0")) + ln.budget
+        faculty_ytd[key] = faculty_ytd.get(key, Decimal("0")) + ln.ytd
+    faculty_used_pct: dict[str, Decimal] = {
+        k: (faculty_ytd[k] / faculty_budget[k] * Decimal("100"))
+        if faculty_budget[k] != Decimal("0")
+        else Decimal("0")
+        for k in faculty_counts
+    }
     total_budget = sum((ln.budget for ln in lines), Decimal("0"))
     total_ytd = sum((ln.ytd for ln in lines), Decimal("0"))
     return ReportSummary(
@@ -69,6 +79,9 @@ def _make_summary(
         total_budget=total_budget,
         total_ytd=total_ytd,
         output_path=output_path,
+        faculty_budget=faculty_budget,
+        faculty_ytd=faculty_ytd,
+        faculty_used_pct=faculty_used_pct,
     )
 
 
@@ -116,6 +129,14 @@ class TestStructuralConformance:
     def test_pdf_body_none(self) -> None:
         assert SubProgramBudgetReportTool.pdf_body is None
 
+    def test_requires_feature_is_none_round_15(self) -> None:
+        """Round 15 temporary free-tier setting: requires_feature must be None.
+
+        Restore to "sub_program" when paid tier resumes — see CLAUDE.md Round 15
+        and docs/03_ROADMAP.md.
+        """
+        assert SubProgramBudgetReportTool.requires_feature is None
+
 
 # ---------------------------------------------------------------------------
 # 2. Inputs
@@ -123,8 +144,10 @@ class TestStructuralConformance:
 
 
 class TestInputs:
-    def test_inputs_has_two_items(self) -> None:
-        assert len(SubProgramBudgetReportTool.inputs) == 2
+    def test_inputs_has_four_items(self) -> None:
+        """Round 21 — four inputs: report file, optional comments file,
+        Revenue threshold, Expense threshold."""
+        assert len(SubProgramBudgetReportTool.inputs) == 4
 
     def test_first_input_is_file(self) -> None:
         fi = SubProgramBudgetReportTool.inputs[0]
@@ -138,10 +161,27 @@ class TestInputs:
         # "optional" must appear somewhere in the label (case-insensitive)
         assert "optional" in fi.label.lower()
 
-    def test_output_suffix_xlsx(self) -> None:
-        assert SubProgramBudgetReportTool.output is not None
-        assert isinstance(SubProgramBudgetReportTool.output, OutputSpec)
-        assert SubProgramBudgetReportTool.output.suffix == ".xlsx"
+    def test_third_input_is_revenue_threshold(self) -> None:
+        """Round 21 — third input is the Revenue over-budget threshold."""
+        ri = SubProgramBudgetReportTool.inputs[2]
+        assert isinstance(ri, RangeInput)
+        assert ri.key == "revenue_threshold"
+        assert ri.default == 101.0
+        assert ri.live is True
+        assert "revenue" in ri.label.lower()
+
+    def test_fourth_input_is_expense_threshold(self) -> None:
+        """Round 21 — fourth input is the Expense over-budget threshold."""
+        ri = SubProgramBudgetReportTool.inputs[3]
+        assert isinstance(ri, RangeInput)
+        assert ri.key == "expense_threshold"
+        assert ri.default == 101.0
+        assert ri.live is True
+        assert "expense" in ri.label.lower()
+
+    def test_output_is_none(self) -> None:
+        """No output file picker — path is auto-derived beside the source PDF."""
+        assert SubProgramBudgetReportTool.output is None
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +197,7 @@ class TestRunHappyPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
+                    # no output_file — path is auto-derived
                 },
                 _noop_progress,
             )
@@ -171,7 +211,6 @@ class TestRunHappyPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -185,7 +224,6 @@ class TestRunHappyPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -209,11 +247,33 @@ class TestRunHappyPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(out),
                 },
                 _noop_progress,
             )
         assert result.output_path == out
+
+    def test_output_path_auto_derived(self, tmp_path: Path) -> None:
+        """When output_file is not supplied, run() auto-derives the path from report_file."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        captured: dict[str, Any] = {}
+
+        def fake_generate(**kwargs: Any) -> Any:
+            captured["output_file"] = kwargs.get("output_file")
+            return summary
+
+        with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
+            tool.run(
+                {
+                    "report_file": str(tmp_path / "report.pdf"),
+                },
+                _noop_progress,
+            )
+        out = captured.get("output_file")
+        assert out is not None
+        name = str(out)
+        assert "Annual_SubProgram_" in name
+        assert name.endswith(".xlsx")
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +298,6 @@ class TestRunWarningPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -260,7 +319,6 @@ class TestRunWarningPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -281,7 +339,6 @@ class TestRunWarningPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -305,7 +362,6 @@ class TestRunErrorPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "missing.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -320,7 +376,6 @@ class TestRunErrorPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "missing.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -335,7 +390,6 @@ class TestRunErrorPath:
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "missing.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -354,20 +408,14 @@ class TestRunMissingCommentsFile:
         summary = _make_summary()
         captured: dict[str, Any] = {}
 
-        def fake_generate(
-            report_file: Path,
-            comments_file: Path | None,
-            output_file: Path,
-            progress: Any,
-        ) -> ReportSummary:
-            captured["comments_file"] = comments_file
+        def fake_generate(**kwargs: Any) -> ReportSummary:
+            captured["comments_file"] = kwargs.get("comments_file")
             return summary
 
         with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
             result = tool.run(
                 {
                     "report_file": str(tmp_path / "report.pdf"),
-                    "output_file": str(tmp_path / "out.xlsx"),
                     # comments_file key deliberately absent
                 },
                 _noop_progress,
@@ -380,13 +428,8 @@ class TestRunMissingCommentsFile:
         summary = _make_summary()
         captured: dict[str, Any] = {}
 
-        def fake_generate(
-            report_file: Path,
-            comments_file: Path | None,
-            output_file: Path,
-            progress: Any,
-        ) -> ReportSummary:
-            captured["comments_file"] = comments_file
+        def fake_generate(**kwargs: Any) -> ReportSummary:
+            captured["comments_file"] = kwargs.get("comments_file")
             return summary
 
         with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
@@ -394,7 +437,6 @@ class TestRunMissingCommentsFile:
                 {
                     "report_file": str(tmp_path / "report.pdf"),
                     "comments_file": "",  # empty string = not supplied
-                    "output_file": str(tmp_path / "out.xlsx"),
                 },
                 _noop_progress,
             )
@@ -424,20 +466,452 @@ class TestHelpText:
 
 # ---------------------------------------------------------------------------
 # 8. Registry
+# ----------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# 9. clear() resets session state
 # ---------------------------------------------------------------------------
 
 
-class TestRegistry:
-    def test_tool_registered(self) -> None:
-        # Importing tools.sub_program fires the register() call.
-        import tools.sub_program  # noqa: F401
-        from toolkit.registry import _registered
+class TestClearResetsState:
+    def test_clear_method_resets_state(self, tmp_path: Path) -> None:
+        """After populating all three session-state attributes, clear() must
+        set them back to None."""
+        from decimal import Decimal
 
-        registered_ids = [cls.id for cls in _registered]
-        assert SubProgramBudgetReportTool.id in registered_ids
+        from tools.sub_program.logic import ReportSummary
 
-    def test_all_tools_includes_sub_program(self) -> None:
-        from toolkit.registry import all_tools
+        tool = SubProgramBudgetReportTool()
 
-        ids = [t.id for t in all_tools()]
-        assert "sub-program" in ids
+        summary = ReportSummary(
+            lines=[],
+            faculty_counts={},
+            over_budget_lines=[],
+            total_budget=Decimal("0"),
+            total_ytd=Decimal("0"),
+            output_path=tmp_path / "output.xlsx",
+            faculty_budget={},
+            faculty_ytd={},
+            faculty_used_pct={},
+        )
+        tool._last_summary = summary
+        tool._commentary_overrides = {"4001": "A note"}
+        tool._last_output_path = tmp_path / "output.xlsx"
+
+        tool.clear()
+
+        assert tool._last_summary is None
+        assert tool._commentary_overrides is None
+        assert tool._last_output_path is None
+
+
+# ---------------------------------------------------------------------------
+# 10. Threshold input — new NumberInput (Fix 2)
+# ---------------------------------------------------------------------------
+
+
+class TestThresholdInput:
+    """The over_budget_threshold NumberInput must be wired correctly into run()."""
+
+    def test_default_threshold_is_101(self, tmp_path: Path) -> None:
+        """When no threshold is supplied, generate_report receives 101.0."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        captured: dict[str, Any] = {}
+
+        def fake_generate(**kwargs: Any) -> Any:
+            captured["threshold"] = kwargs.get("over_budget_threshold")
+            return summary
+
+        with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
+            tool.run({"report_file": str(tmp_path / "report.pdf")}, _noop_progress)
+        assert captured["threshold"] == 101.0
+
+    def test_custom_threshold_passed_to_logic(self, tmp_path: Path) -> None:
+        """User-supplied threshold is forwarded to generate_report."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        captured: dict[str, Any] = {}
+
+        def fake_generate(**kwargs: Any) -> Any:
+            captured["threshold"] = kwargs.get("over_budget_threshold")
+            return summary
+
+        with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
+            tool.run(
+                {
+                    "report_file": str(tmp_path / "report.pdf"),
+                    "over_budget_threshold": "115.0",
+                },
+                _noop_progress,
+            )
+        assert captured["threshold"] == 115.0
+
+    def test_threshold_in_banner_text(self, tmp_path: Path) -> None:
+        """Banner text must mention the threshold percentage."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        with patch("tools.sub_program.frame.logic.generate_report", return_value=summary):
+            result = tool.run(
+                {"report_file": str(tmp_path / "report.pdf")},
+                _noop_progress,
+            )
+        # Default threshold 101% must appear in banner
+        assert "101" in result.banner_text
+
+    def test_zero_threshold_string_defaults_to_101(self, tmp_path: Path) -> None:
+        """A threshold value of exactly '0' (falsy) defaults to 101.0."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        captured: dict[str, Any] = {}
+
+        def fake_generate(**kwargs: Any) -> Any:
+            captured["threshold"] = kwargs.get("over_budget_threshold")
+            return summary
+
+        with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
+            tool.run(
+                {
+                    "report_file": str(tmp_path / "report.pdf"),
+                    "over_budget_threshold": "0",
+                },
+                _noop_progress,
+            )
+        assert captured["threshold"] == 101.0
+
+    def test_over_row_style_uses_over_flag(self, tmp_path: Path) -> None:
+        """_row_style returns pink background only when _over is True."""
+        tool = SubProgramBudgetReportTool()
+        over_line = _make_line("4001", budget="5000", ytd="7000", is_over=True)
+        normal_line = _make_line("5001", budget="5000", ytd="2000", is_over=False)
+        summary = _make_summary(
+            lines=[over_line, normal_line],
+            over_budget_lines=[over_line],
+        )
+        with patch("tools.sub_program.frame.logic.generate_report", return_value=summary):
+            result = tool.run(
+                {"report_file": str(tmp_path / "report.pdf")},
+                _noop_progress,
+            )
+        assert result.table is not None
+        row_style = result.table.row_style
+        assert row_style is not None
+        # Over-budget row must get pink background
+        assert result.table_rows is not None
+        over_row = result.table_rows[0]
+        normal_row = result.table_rows[1]
+        assert over_row.get("_over") is True
+        assert normal_row.get("_over") is False
+        over_style = row_style(over_row)
+        normal_style = row_style(normal_row)
+        assert over_style.get("background") is not None and HL_MISMATCH in over_style.get(
+            "background", ""
+        )
+        assert normal_style == {}
+
+
+# ---------------------------------------------------------------------------
+# 11. Two-phase preview + export
+# ---------------------------------------------------------------------------
+
+
+class TestTwoPhasePreviewExport:
+    """Tests for the threshold slider + deferred export workflow."""
+
+    def test_run_caches_summary_and_threshold(self, tmp_path: Path) -> None:
+        """After run(), _cached_summary is populated and _cached_threshold matches input."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        with patch("tools.sub_program.frame.logic.generate_report", return_value=summary):
+            tool.run(
+                {
+                    "report_file": str(tmp_path / "report.pdf"),
+                    "over_budget_threshold": "115.0",
+                },
+                _noop_progress,
+            )
+        assert tool._cached_summary is not None
+        assert tool._cached_threshold == 115.0
+
+    def test_run_does_not_write_xlsx(self, tmp_path: Path) -> None:
+        """run() must not write any XLSX — _last_output_path stays None."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        with patch("tools.sub_program.frame.logic.generate_report", return_value=summary):
+            tool.run(
+                {"report_file": str(tmp_path / "report.pdf")},
+                _noop_progress,
+            )
+        # No XLSX written; _last_output_path only set by _export_xlsx.
+        assert tool._last_output_path is None
+
+    def test_run_generate_report_called_with_write_xlsx_false(self, tmp_path: Path) -> None:
+        """run() must call generate_report with write_xlsx=False."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        captured: dict[str, Any] = {}
+
+        def fake_generate(**kwargs: Any) -> Any:
+            captured["write_xlsx"] = kwargs.get("write_xlsx")
+            return summary
+
+        with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
+            tool.run(
+                {"report_file": str(tmp_path / "report.pdf")},
+                _noop_progress,
+            )
+        assert captured["write_xlsx"] is False
+
+    def test_run_banner_contains_preview_hint(self, tmp_path: Path) -> None:
+        """Preview mode banner must mention the Export to Excel hint."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        with patch("tools.sub_program.frame.logic.generate_report", return_value=summary):
+            result = tool.run(
+                {"report_file": str(tmp_path / "report.pdf")},
+                _noop_progress,
+            )
+        assert "Export to Excel" in result.banner_text
+
+    def test_preview_update_returns_new_tool_result(self, tmp_path: Path) -> None:
+        """preview_update returns a ToolResult when summary is cached."""
+        tool = SubProgramBudgetReportTool()
+        # used_pct is 50 in _make_line; set is_over False but we want pct > threshold
+        from decimal import Decimal
+
+        over_line = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("5000"),
+            ytd=Decimal("5200"),
+            remaining=Decimal("-200"),
+            used_pct=Decimal("104.0"),
+            faculty="Curriculum",
+            is_over=False,  # parser's naive flag; preview will recompute
+        )
+        normal_line = _make_line("5001", is_over=False)
+        summary = _make_summary(lines=[over_line, normal_line])
+        tool._cached_summary = summary
+        tool._cached_threshold = 101.0
+
+        result = tool.preview_update("over_budget_threshold", 50.0)
+
+        assert result is not None
+        # With threshold=50, over_line (used_pct=104) should be flagged over.
+        assert result.table_rows is not None
+        over_row = result.table_rows[0]
+        assert over_row.get("_over") is True
+
+    def test_preview_update_threshold_low_marks_all_over(self) -> None:
+        """Very low threshold flags all lines as over-budget."""
+        tool = SubProgramBudgetReportTool()
+        from decimal import Decimal
+
+        lines = [
+            SubProgramLine(
+                sub_program="4001",
+                account="Expenditure",
+                description="A",
+                budget=Decimal("1000"),
+                ytd=Decimal("500"),
+                remaining=Decimal("500"),
+                used_pct=Decimal("50.0"),
+                faculty="Curriculum",
+                is_over=False,
+            ),
+            SubProgramLine(
+                sub_program="5001",
+                account="Expenditure",
+                description="B",
+                budget=Decimal("2000"),
+                ytd=Decimal("1800"),
+                remaining=Decimal("200"),
+                used_pct=Decimal("90.0"),
+                faculty="Wellbeing",
+                is_over=False,
+            ),
+        ]
+        summary = _make_summary(lines=lines)
+        tool._cached_summary = summary
+        tool._cached_threshold = 101.0
+
+        # Threshold=0 -> all lines (50% and 90%) exceed 0.
+        result = tool.preview_update("over_budget_threshold", 0.0)
+        assert result is not None
+        assert result.table_rows is not None
+        assert all(row["_over"] for row in result.table_rows)
+
+        # Threshold=9999 -> no lines exceed it.
+        result2 = tool.preview_update("over_budget_threshold", 9999.0)
+        assert result2 is not None
+        assert result2.table_rows is not None
+        assert all(not row["_over"] for row in result2.table_rows)
+
+    def test_preview_update_returns_none_when_no_cached_summary(self) -> None:
+        """preview_update returns None when no summary has been cached (no run yet)."""
+        tool = SubProgramBudgetReportTool()
+        assert tool._cached_summary is None
+        result = tool.preview_update("over_budget_threshold", 80.0)
+        assert result is None
+
+    def test_preview_update_ignores_unknown_key(self) -> None:
+        """preview_update returns None for an unrecognised input key."""
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        tool._cached_summary = summary
+        result = tool.preview_update("some_other_key", 50.0)
+        assert result is None
+
+    def test_export_xlsx_writes_file(self, tmp_path: Path) -> None:
+        """After run(), _export_xlsx writes the XLSX and sets _last_output_path."""
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        tool = SubProgramBudgetReportTool()
+        lines = [_make_line("4001")]
+        out_path = tmp_path / "output.xlsx"
+        summary = _make_summary(lines=lines, output_path=out_path)
+        tool._cached_summary = summary
+        tool._cached_threshold = 101.0
+
+        # Inject a stub tkinter.messagebox so the local `import` inside
+        # _export_xlsx succeeds even when tkinter is absent (Linux CI).
+        mb_stub = types.ModuleType("tkinter.messagebox")
+        mb_stub.showinfo = MagicMock()  # type: ignore[attr-defined]
+        mb_stub.showerror = MagicMock()  # type: ignore[attr-defined]
+
+        tk_stub = sys.modules.get("tkinter")
+        existing_mb = sys.modules.get("tkinter.messagebox")
+        if tk_stub is None:
+            tk_stub = types.ModuleType("tkinter")
+            sys.modules["tkinter"] = tk_stub
+        sys.modules["tkinter.messagebox"] = mb_stub
+
+        try:
+            with patch("tools.sub_program.frame.logic._write_xlsx") as mock_write:
+                tool._export_xlsx()
+        finally:
+            if existing_mb is None:
+                sys.modules.pop("tkinter.messagebox", None)
+
+        mock_write.assert_called_once()
+        call_kwargs = mock_write.call_args
+        assert call_kwargs is not None
+        assert tool._last_output_path == out_path
+
+    def test_export_xlsx_without_run_shows_info(self) -> None:
+        """_export_xlsx without a prior run shows a messagebox and does not write."""
+        import sys
+        import types
+        from unittest.mock import MagicMock
+
+        tool = SubProgramBudgetReportTool()
+        assert tool._cached_summary is None
+
+        # Inject a stub tkinter.messagebox so the local `import` inside
+        # _export_xlsx succeeds even when tkinter is absent (Linux CI).
+        mb_stub = types.ModuleType("tkinter.messagebox")
+        mock_info = MagicMock()
+        mb_stub.showinfo = mock_info  # type: ignore[attr-defined]
+        mb_stub.showerror = MagicMock()  # type: ignore[attr-defined]
+
+        tk_stub = sys.modules.get("tkinter")
+        existing_mb = sys.modules.get("tkinter.messagebox")
+        if tk_stub is None:
+            tk_stub = types.ModuleType("tkinter")
+            sys.modules["tkinter"] = tk_stub
+        sys.modules["tkinter.messagebox"] = mb_stub
+
+        try:
+            with patch("tools.sub_program.frame.logic._write_xlsx") as mock_write:
+                tool._export_xlsx()
+        finally:
+            if existing_mb is None:
+                sys.modules.pop("tkinter.messagebox", None)
+
+        mock_write.assert_not_called()
+        mock_info.assert_called_once()
+
+    def test_secondary_actions_includes_export_to_excel(self) -> None:
+        """secondary_actions must contain Export to Excel in the correct order."""
+        tool = SubProgramBudgetReportTool()
+        actions = tool.secondary_actions()
+        labels = [label for label, _ in actions]
+        assert labels == ["Edit commentary...", "Export to Excel", "Open output folder"]
+
+    def test_clear_resets_cached_summary_and_threshold(self) -> None:
+        """clear() must reset _cached_summary to None and _cached_threshold to 101.0."""
+        tool = SubProgramBudgetReportTool()
+        tool._cached_summary = _make_summary()
+        tool._cached_threshold = 55.0
+
+        tool.clear()
+
+        assert tool._cached_summary is None
+        assert tool._cached_threshold == 101.0
+
+    def test_run_uses_actual_threshold_value_not_clamped(self, tmp_path: Path) -> None:
+        """run() must receive and cache the actual threshold value, even above slider max.
+
+        The shell passes actual_var.get() (unclamped) via _input_cache.  Verify that
+        a threshold of 200.0 (above the slider max of 120) is stored as-is.
+        """
+        tool = SubProgramBudgetReportTool()
+        summary = _make_summary()
+        captured: dict[str, Any] = {}
+
+        def fake_generate(**kwargs: Any) -> Any:
+            captured["threshold"] = kwargs.get("over_budget_threshold")
+            return summary
+
+        with patch("tools.sub_program.frame.logic.generate_report", side_effect=fake_generate):
+            tool.run(
+                {
+                    "report_file": str(tmp_path / "report.pdf"),
+                    "over_budget_threshold": 200.0,
+                },
+                _noop_progress,
+            )
+
+        assert captured["threshold"] == 200.0, (
+            f"Expected threshold 200.0 but got {captured['threshold']!r} — "
+            "run() must not clamp the actual_var value"
+        )
+        assert tool._cached_threshold == 200.0
+
+    def test_preview_update_with_above_range_value(self) -> None:
+        """preview_update with threshold=200 recomputes is_over correctly.
+
+        A line with used_pct=104% is NOT over-budget at threshold=200, so the
+        result should have _over=False for that row.
+        """
+        from decimal import Decimal
+
+        tool = SubProgramBudgetReportTool()
+        over_line = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("5000"),
+            ytd=Decimal("5200"),
+            remaining=Decimal("-200"),
+            used_pct=Decimal("104.0"),
+            faculty="Curriculum",
+            is_over=True,
+        )
+        summary = _make_summary(lines=[over_line], over_budget_lines=[over_line])
+        tool._cached_summary = summary
+        tool._cached_threshold = 101.0
+
+        # With threshold=200, used_pct=104 is below the threshold → not over.
+        result = tool.preview_update("expense_threshold", 200.0)
+        assert result is not None
+        assert result.table_rows is not None
+        row = result.table_rows[0]
+        assert row.get("_over") is False, (
+            "used_pct=104% should NOT be flagged over-budget at threshold=200"
+        )
+        assert tool._cached_threshold == 200.0

@@ -58,6 +58,7 @@
   --hl-mismatch:           #F4CCCC;   /* red — row mismatch */
   --hl-source-only:        #E2F0D9;   /* green — source-only inserted */
   --hl-edited:             #FFF2CC;   /* yellow — user-edited (convention) */
+  --rail-hl-bg:            #F9DDDD;   /* lighter HL_MISMATCH for rail row marker */
 
   /* ---- Tkinter runtime greys (not present in web — added for Python port) ---- */
   --bg-readonly:           #F5F5F5;   /* read-only entry + disabled button face */

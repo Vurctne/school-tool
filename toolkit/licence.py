@@ -1,12 +1,14 @@
 """Signed licence token verifier and renewal prompt scheduler.
 
-Ed25519 public key is embedded at build time by replacing the placeholder
-constant ``PUBLIC_KEY_BASE64``.  Ivan swaps this per release using the value
-produced by the backend's ``wrangler secret get`` derivative.
+Ed25519 public key is read at module-load time from
+``app_metadata.LICENCE_PUBLIC_KEY`` (populated by
+``scripts/generate_licence_keypair.py --write-app-metadata``). The local
+``PUBLIC_KEY_BASE64`` constant remains a public attribute so tests can
+patch it via ``patch.object(toolkit.licence, "PUBLIC_KEY_BASE64", …)``.
 
-For M2 (development milestone) the placeholder is left as-is; signature
-verification will fail gracefully (``"expired"`` / ``"none"`` states) until
-real keys are embedded.
+If ``app_metadata.LICENCE_PUBLIC_KEY`` is empty/missing, signature
+verification fails closed and ``read_status()`` returns ``"expired"`` —
+the intended pre-M2 state when no keypair exists yet.
 
 Licence file location (§3.1 / ADR-0011):
   Windows:    %LOCALAPPDATA%\\Packages\\SchoolTool_vurctne\\LocalCache\\licence.json
@@ -36,14 +38,35 @@ from toolkit import api_client as _api_module
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Embedded public key — SWAP THIS PER RELEASE
+# Embedded public key — sourced from app_metadata.LICENCE_PUBLIC_KEY
 # ---------------------------------------------------------------------------
+#
+# The Ed25519 public key (32 raw bytes, base64-encoded) is set in
+# ``app_metadata.LICENCE_PUBLIC_KEY`` during the release pipeline (see
+# ``scripts/generate_licence_keypair.py --write-app-metadata``).  We mirror
+# it here as a string so the verification path doesn't need to call into
+# ``app_metadata`` on every signature check.
+#
+# An empty / invalid string means all licence signatures will fail
+# verification and the tool will report "expired" — that's the intended
+# pre-M2 state when no keypair has been generated yet.
 
-# Placeholder: base64-encoded Ed25519 public key (32 raw bytes).
-# Set to a real value by the release pipeline.  An empty / invalid string means
-# all licence signatures will fail verification and the tool will report "expired"
-# until the key is populated.
-PUBLIC_KEY_BASE64: str = "__EMBEDDED_AT_BUILD_TIME__"
+
+def _load_public_key_b64() -> str:
+    """Return the embedded Ed25519 public key as a base64 string.
+
+    Falls back to an empty string if app_metadata is missing the constant
+    (older builds) — which causes verification to fail closed.
+    """
+    raw: object = getattr(app_metadata, "LICENCE_PUBLIC_KEY", b"")
+    if isinstance(raw, bytes):
+        return raw.decode("ascii", errors="replace")
+    if isinstance(raw, str):
+        return raw
+    return ""
+
+
+PUBLIC_KEY_BASE64: str = _load_public_key_b64()
 
 # ---------------------------------------------------------------------------
 # Path helpers (mirrors account.py's cache dir)

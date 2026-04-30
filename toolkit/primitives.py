@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from toolkit import tokens
-from toolkit.base_tool import BannerLevel, LogLine
+from toolkit.base_tool import BannerLevel, LogLine, RailItem
 
 logger = logging.getLogger(__name__)
 
@@ -772,6 +772,11 @@ class Table(ttk.Frame):
 
     columns: list of dicts with keys: key, label, width (optional), align (optional),
              mono (optional bool for numeric columns).
+
+    Optional kwargs (phase-3 additions):
+        row_style:    Callable[[dict], dict[str, str]] — per-row Tkinter option dict.
+                      Takes precedence over legacy ``_bg``/``_fg`` row keys when present.
+        on_row_click: Callable[[dict], None] — invoked with the full row dict on selection.
     """
 
     def __init__(
@@ -779,12 +784,17 @@ class Table(ttk.Frame):
         parent: tk.Widget,
         columns: list[dict[str, Any]],
         min_height: int = 200,
+        row_style: Callable[[dict[str, Any]], dict[str, str]] | None = None,
+        on_row_click: Callable[[dict[str, Any]], None] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(parent, **kwargs)
 
         col_ids = [str(c["key"]) for c in columns]
         self._columns = columns
+        self._row_style = row_style
+        self._on_row_click = on_row_click
+        self._rows: list[dict[str, Any]] = []  # live snapshot for click lookup
 
         self._tree = ttk.Treeview(
             self,
@@ -793,15 +803,23 @@ class Table(ttk.Frame):
             height=max(5, min_height // 22),
         )
 
-        # Configure columns and headings
+        # Configure columns and headings.
+        # stretch=True on all columns causes Tk to recompute column widths on
+        # every pixel of a resize drag (O(n_cols) per tick).  Only the LAST
+        # column stretches to fill remaining space; all others use fixed widths.
+        # This reduces layout work dramatically for tables with many columns
+        # (e.g. Sub-Program has 7 columns).  (Fix 2 — Round 13)
         mono_font = _make_font("Cascadia Mono", tokens.FS_12)
-        for col in columns:
+        last_col_idx = len(columns) - 1
+        for i, col in enumerate(columns):
             cid = str(col["key"])
             width = int(col.get("width", 120))
             is_right = col.get("align") == "right" or col.get("mono")
             col_anchor: Literal["e", "w"] = "e" if is_right else "w"
+            # Only the last column stretches; others keep their declared widths.
+            col_stretch = i == last_col_idx
             self._tree.heading(cid, text=str(col["label"]))
-            self._tree.column(cid, width=width, anchor=col_anchor, stretch=True)
+            self._tree.column(cid, width=width, anchor=col_anchor, stretch=col_stretch)
 
         # Scrollbars
         vsb = ttk.Scrollbar(self, orient="vertical", command=self._tree.yview)
@@ -820,7 +838,30 @@ class Table(ttk.Frame):
         # Mono font tag for numeric cells (applied per column via tags on rows)
         self._mono_font = mono_font
 
+        # Row-click binding (set once; remains valid across set_rows calls)
+        if on_row_click is not None:
+            self._tree.bind("<<TreeviewSelect>>", self._on_select)
+
+    def _on_select(self, _event: Any = None) -> None:
+        """Internal handler: reconstruct row dict and invoke on_row_click."""
+        if self._on_row_click is None:
+            return
+        sel = self._tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        # iid was stored as the row index during insert
+        try:
+            idx = int(self._tree.item(iid, "text"))
+        except (ValueError, tk.TclError):
+            return
+        if 0 <= idx < len(self._rows):
+            self._on_row_click(self._rows[idx])
+
     def set_rows(self, rows: list[dict[str, Any]]) -> None:
+        # Save live snapshot for click reconstruction
+        self._rows = list(rows)
+
         # Clear existing
         for iid in self._tree.get_children():
             self._tree.delete(iid)
@@ -829,21 +870,326 @@ class Table(ttk.Frame):
             values = [str(row.get(str(c["key"]), "")) for c in self._columns]
             tags: list[str] = []
 
-            bg = row.get("_bg")
-            fg = row.get("_fg")
+            # Phase-3: row_style takes precedence over legacy _bg/_fg keys
+            style_opts: dict[str, str] = {}
+            if self._row_style is not None:
+                style_opts = self._row_style(row)
 
-            if bg or fg:
-                tag_name = f"custom_{i}"
+            if style_opts:
+                tag_name = f"style_{i}"
                 self._tree.tag_configure(
                     tag_name,
-                    background=str(bg) if bg else "",
-                    foreground=str(fg) if fg else "",
+                    background=style_opts.get("background", ""),
+                    foreground=style_opts.get("foreground", ""),
                 )
                 tags.append(tag_name)
-            elif i % 2:
-                tags.append("alt")
+            else:
+                bg = row.get("_bg")
+                fg = row.get("_fg")
 
-            self._tree.insert("", "end", values=values, tags=tags)
+                if bg or fg:
+                    tag_name = f"custom_{i}"
+                    self._tree.tag_configure(
+                        tag_name,
+                        background=str(bg) if bg else "",
+                        foreground=str(fg) if fg else "",
+                    )
+                    tags.append(tag_name)
+                elif i % 2:
+                    tags.append("alt")
+
+            # Store row index as the item's "text" field for click reconstruction
+            self._tree.insert("", "end", text=str(i), values=values, tags=tags)
+
+
+# ---------------------------------------------------------------------------
+# SelectableList
+# ---------------------------------------------------------------------------
+
+
+class SelectableList(tk.Frame):
+    """Scrollable vertical list of label+value rows with click-to-select.
+
+    Used as the in-tool side rail (Sub-Program faculty filter) and inside
+    CommentaryDialog (sub-program picker).
+
+    Parameters
+    ----------
+    parent:
+        Parent widget.
+    items:
+        Initial list of RailItem entries to render.
+    on_select:
+        Callback invoked with ``item.filter_key`` when the user clicks a row
+        or navigates with Up/Down arrow keys.
+    focus_on_mount:
+        When True the inner canvas receives focus immediately after mount.
+        Pass True from CommentaryDialog; leave False for the in-tool rail.
+    width:
+        Fixed width in pixels.  Default 220 matches the locked shell rail width.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        items: list[RailItem],
+        on_select: Callable[[str], None],
+        *,
+        focus_on_mount: bool = False,
+        width: int = 220,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(parent, **kwargs)
+
+        self._on_select = on_select
+        self._active_key: str | None = None
+        self._item_list: list[RailItem] = []
+        self._row_frames: dict[str, tk.Frame] = {}
+        self._row_labels: dict[str, tk.Label] = {}
+        self._row_badges: dict[str, tk.Label] = {}
+        self._focus_on_mount = focus_on_mount
+        self._width = width
+        # Debounce after() ids for resize handlers — cancel-and-reschedule so
+        # layout math runs only once per ~100 ms idle (raised from 50 ms in
+        # Round 14), not on every pixel drag.  This reduces flicker frequency
+        # during window-drag while keeping settle latency acceptably low.
+        self._inner_configure_after: str | None = None
+        self._canvas_configure_after: str | None = None
+
+        # Outer border frame
+        border = tk.Frame(self, bg=tokens.BORDER_SUBTLE, bd=0)
+        border.pack(fill="both", expand=True)
+
+        # Canvas + scrollbar
+        self._canvas = tk.Canvas(
+            border,
+            bg=tokens.BG_INSET,
+            highlightthickness=0,
+            bd=0,
+        )
+        scrollbar = ttk.Scrollbar(border, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=scrollbar.set)
+
+        scrollbar.pack(side="right", fill="y")
+        self._canvas.pack(side="left", fill="both", expand=True)
+
+        # Inner frame (holds the row widgets)
+        self._inner = tk.Frame(self._canvas, bg=tokens.BG_INSET)
+        self._window = self._canvas.create_window((0, 0), window=self._inner, anchor="nw")
+
+        self._inner.bind("<Configure>", self._on_inner_configure)
+        self._canvas.bind("<Configure>", self._on_canvas_configure)
+
+        # Keyboard navigation
+        self._canvas.configure(takefocus=True)
+        self._canvas.bind("<Up>", lambda e: self._nav(-1))
+        self._canvas.bind("<Down>", lambda e: self._nav(1))
+        self._canvas.bind("<Button-1>", lambda e: self._canvas.focus_set())
+        self._inner.bind("<Up>", lambda e: self._nav(-1))
+        self._inner.bind("<Down>", lambda e: self._nav(1))
+
+        # Populate initial items
+        self.set_items(items)
+
+        if focus_on_mount:
+            self._canvas.after_idle(self._canvas.focus_set)
+
+    # ------------------------------------------------------------------
+    # Private layout callbacks
+    # ------------------------------------------------------------------
+
+    def _on_inner_configure(self, _event: Any) -> None:
+        # Debounce: cancel any pending call and reschedule 100 ms out.
+        # This fires on every pixel of an inner-frame size change — batching
+        # via after() prevents layout thrash during rapid window resizes.
+        if self._inner_configure_after is not None:
+            try:
+                self._canvas.after_cancel(self._inner_configure_after)
+            except tk.TclError:
+                pass
+        self._inner_configure_after = self._canvas.after(100, self._do_inner_configure)
+
+    def _do_inner_configure(self) -> None:
+        """Deferred scroll-region update — runs once per 100 ms idle window."""
+        self._inner_configure_after = None
+        try:
+            self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+        except tk.TclError:
+            pass  # widget may have been destroyed between schedule and fire
+
+    def _on_canvas_configure(self, event: Any) -> None:
+        # Debounce: same approach — fire the itemconfig once per idle window.
+        w = event.width
+        if self._canvas_configure_after is not None:
+            try:
+                self._canvas.after_cancel(self._canvas_configure_after)
+            except tk.TclError:
+                pass
+        self._canvas_configure_after = self._canvas.after(100, lambda: self._do_canvas_configure(w))
+
+    def _do_canvas_configure(self, width: int) -> None:
+        """Deferred canvas-window width update — runs once per 100 ms idle window."""
+        self._canvas_configure_after = None
+        try:
+            self._canvas.itemconfig(self._window, width=width)
+        except tk.TclError:
+            pass  # widget may have been destroyed between schedule and fire
+
+    # ------------------------------------------------------------------
+    # Row building
+    # ------------------------------------------------------------------
+
+    def _build_rows(self) -> None:
+        """Destroy all existing row widgets and rebuild from self._item_list."""
+        for widget in self._inner.winfo_children():
+            widget.destroy()
+        self._row_frames.clear()
+        self._row_labels.clear()
+        self._row_badges.clear()
+
+        label_font = _make_font(tokens.FONT_SANS_FALLBACK, tokens.FS_13)
+        badge_font = _make_font(tokens.FONT_MONO_PRIMARY, tokens.FS_12)
+
+        for idx, item in enumerate(self._item_list):
+            # Determine base background (alternating or highlight)
+            if item.highlight:
+                base_bg = tokens.RAIL_HL_BG
+            elif idx % 2 == 0:
+                base_bg = tokens.BG_INSET
+            else:
+                base_bg = tokens.BG_ROW_ALT
+
+            row_frame = tk.Frame(
+                self._inner,
+                bg=base_bg,
+                cursor="hand2",
+            )
+            row_frame.pack(fill="x")
+
+            lbl = tk.Label(
+                row_frame,
+                text=item.label,
+                font=label_font,
+                fg=tokens.FG_1,
+                bg=base_bg,
+                anchor="w",
+                padx=tokens.SP_2,
+                pady=tokens.SP_1,
+            )
+            lbl.pack(side="left", fill="x", expand=True)
+
+            badge = tk.Label(
+                row_frame,
+                text=item.value,
+                font=badge_font,
+                fg=tokens.FG_2,
+                bg=base_bg,
+                anchor="e",
+                padx=tokens.SP_2,
+                pady=tokens.SP_1,
+            )
+            badge.pack(side="right")
+
+            self._row_frames[item.filter_key] = row_frame
+            self._row_labels[item.filter_key] = lbl
+            self._row_badges[item.filter_key] = badge
+
+            # Bind click on every sub-widget
+            def _make_click(key: str) -> Callable[..., None]:
+                def _click(*_: Any) -> None:
+                    self.set_active(key)
+                    self._on_select(key)
+
+                return _click
+
+            click_cb = _make_click(item.filter_key)
+            row_frame.bind("<Button-1>", click_cb)
+            lbl.bind("<Button-1>", click_cb)
+            badge.bind("<Button-1>", click_cb)
+
+        # Restore active highlight if still present
+        if self._active_key in self._row_frames:
+            self._apply_active(self._active_key)
+
+    def _row_base_bg(self, filter_key: str) -> str:
+        """Return the default (non-selected) background for the given row."""
+        for idx, item in enumerate(self._item_list):
+            if item.filter_key == filter_key:
+                if item.highlight:
+                    return tokens.RAIL_HL_BG
+                return tokens.BG_INSET if idx % 2 == 0 else tokens.BG_ROW_ALT
+        return tokens.BG_INSET
+
+    def _apply_active(self, key: str | None) -> None:
+        """Paint the active row blue; restore all others to their base colour."""
+        for fk, frame in self._row_frames.items():
+            lbl = self._row_labels.get(fk)
+            badge = self._row_badges.get(fk)
+            if fk == key:
+                bg = tokens.RAIL_SELECTED
+                fg = tokens.FG_INVERSE
+            else:
+                bg = self._row_base_bg(fk)
+                fg = tokens.FG_1
+            frame.configure(bg=bg)
+            if lbl:
+                lbl.configure(bg=bg, fg=fg)
+            if badge:
+                badge.configure(bg=bg, fg=fg)
+
+    # ------------------------------------------------------------------
+    # Navigation
+    # ------------------------------------------------------------------
+
+    def _nav(self, direction: int) -> str:
+        keys = [item.filter_key for item in self._item_list]
+        if not keys:
+            return "break"
+        if self._active_key not in keys:
+            new_key = keys[0]
+        else:
+            cur_idx = keys.index(self._active_key)
+            new_idx = max(0, min(len(keys) - 1, cur_idx + direction))
+            new_key = keys[new_idx]
+        self.set_active(new_key)
+        self._on_select(new_key)
+        return "break"
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def set_active(self, filter_key: str | None) -> None:
+        """Highlight the row whose filter_key matches; pass None to clear."""
+        self._active_key = filter_key
+        self._apply_active(filter_key)
+
+    def set_items(self, items: list[RailItem]) -> None:
+        """Replace the rendered items, preserving active selection if still present."""
+        prev_key = self._active_key
+        self._item_list = list(items)
+        self._build_rows()
+        # Re-apply active if the key survived the refresh
+        new_keys = {item.filter_key for item in self._item_list}
+        if prev_key in new_keys:
+            self._active_key = prev_key
+            self._apply_active(prev_key)
+        else:
+            self._active_key = None
+
+    def get_label_widget(self, filter_key: str) -> tk.Label | None:
+        """Return the label widget for a row, or None if not found.
+
+        Intended for CommentaryDialog to update per-row font weight when
+        commentary text is added or removed.  Do not mutate bg/fg via this
+        handle — use set_active / set_items instead.
+        """
+        return self._row_labels.get(filter_key)
+
+    @property
+    def canvas(self) -> tk.Canvas:
+        """Expose the inner canvas for focus management by CommentaryDialog."""
+        return self._canvas
 
 
 # ---------------------------------------------------------------------------
@@ -896,6 +1242,7 @@ class Metric(ttk.Frame):
         val_lbl.pack(side="top", fill="x")
 
 
+# ------------------------
 # ---------------------------------------------------------------------------
 # CommentaryDialog
 # ---------------------------------------------------------------------------
@@ -917,7 +1264,7 @@ def CommentaryDialog(  # noqa: N802
     sub_programs:
         Ordered list of sub-program IDs to display in the left-hand list.
     initial:
-        Mapping of sub-program id → existing commentary text (may be empty).
+        Mapping of sub-program id -> existing commentary text (may be empty).
 
     Returns
     -------
@@ -968,42 +1315,52 @@ def CommentaryDialog(  # noqa: N802
     ).pack(side="left", fill="y")
 
     # -----------------------------------------------------------------------
-    # Main body — left list + right editor
+    # Main body -- left list + right editor
     # -----------------------------------------------------------------------
     body = tk.Frame(top, bg=tokens.BG_PANEL)
     body.pack(side="top", fill="both", expand=True)
 
-    # --- Left pane: scrollable list (210 px wide) ---------------------------
+    # --- Left pane: SelectableList (210 px wide) ----------------------------
     left_frame = tk.Frame(body, bg=tokens.BG_PANEL, width=210)
     left_frame.pack(side="left", fill="y")
     left_frame.pack_propagate(False)
 
-    list_border = tk.Frame(left_frame, bg=tokens.BORDER_SUBTLE, bd=0)
-    list_border.pack(fill="both", expand=True, padx=(tokens.SP_3, 0), pady=tokens.SP_3)
+    # Build initial RailItem list -- value="" because CommentaryDialog does
+    # not show a numeric badge; highlight=False because over-budget semantics
+    # don't apply in this context.
+    def _make_rail_items() -> list[RailItem]:
+        return [RailItem(label=sp, value="", filter_key=sp) for sp in sub_programs]
 
-    list_canvas = tk.Canvas(
-        list_border,
-        bg=tokens.BG_PANEL,
-        highlightthickness=0,
-        bd=0,
+    _sp_list = list(sub_programs)
+    _selected: list[str] = []  # mutable single-element container
+
+    # Fonts used for bold-if-has-text feedback on the left list
+    normal_font = _make_font("Segoe UI", tokens.FS_13)
+    bold_font = _make_font("Segoe UI", tokens.FS_13, "bold")
+
+    def _on_sp_select(sp_id: str) -> None:
+        _load_sp(sp_id)
+
+    list_widget = SelectableList(
+        left_frame,
+        items=_make_rail_items(),
+        on_select=_on_sp_select,
+        focus_on_mount=True,
+        width=210,
     )
-    list_scrollbar = ttk.Scrollbar(list_border, orient="vertical", command=list_canvas.yview)
-    list_canvas.configure(yscrollcommand=list_scrollbar.set)
+    list_widget.pack(
+        fill="both",
+        expand=True,
+        padx=(tokens.SP_3, 0),
+        pady=tokens.SP_3,
+    )
 
-    list_scrollbar.pack(side="right", fill="y")
-    list_canvas.pack(side="left", fill="both", expand=True)
-
-    list_inner = tk.Frame(list_canvas, bg=tokens.BG_PANEL)
-    list_window = list_canvas.create_window((0, 0), window=list_inner, anchor="nw")
-
-    def _on_list_inner_configure(event: Any) -> None:
-        list_canvas.configure(scrollregion=list_canvas.bbox("all"))
-
-    def _on_list_canvas_configure(event: Any) -> None:
-        list_canvas.itemconfig(list_window, width=event.width)
-
-    list_inner.bind("<Configure>", _on_list_inner_configure)
-    list_canvas.bind("<Configure>", _on_list_canvas_configure)
+    # Apply initial bold-font for items that already have commentary
+    for sp_id in sub_programs:
+        if bool(initial.get(sp_id, "").strip()):
+            lbl = list_widget.get_label_widget(sp_id)
+            if lbl is not None:
+                lbl.configure(font=bold_font)
 
     # Divider between left and right
     tk.Frame(body, bg=tokens.BORDER_SUBTLE, width=1).pack(side="left", fill="y")
@@ -1052,20 +1409,15 @@ def CommentaryDialog(  # noqa: N802
     btn_row.pack(side="bottom", fill="x", padx=tokens.SP_4, pady=tokens.SP_3)
 
     # -----------------------------------------------------------------------
-    # State: currently selected sub-program id
+    # State helpers
     # -----------------------------------------------------------------------
-    _selected: list[str] = []  # mutable single-element container
-    _row_labels: dict[str, tk.Label] = {}
-
-    normal_font = _make_font("Segoe UI", tokens.FS_13)
-    bold_font = _make_font("Segoe UI", tokens.FS_13, "bold")
 
     def _update_row_font(sp_id: str) -> None:
-        lbl = _row_labels.get(sp_id)
-        if lbl is None:
+        lbl_widget = list_widget.get_label_widget(sp_id)
+        if lbl_widget is None:
             return
         has_text = bool(comments.get(sp_id, "").strip())
-        lbl.configure(font=bold_font if has_text else normal_font)
+        lbl_widget.configure(font=bold_font if has_text else normal_font)
 
     def _save_current_text() -> None:
         """Flush the editor content into comments for the currently selected sp."""
@@ -1081,62 +1433,13 @@ def CommentaryDialog(  # noqa: N802
         _selected.clear()
         _selected.append(sp_id)
 
-        # Highlight selected row; clear others
-        for sid, lbl in _row_labels.items():
-            lbl.configure(
-                bg=tokens.RAIL_SELECTED if sid == sp_id else tokens.BG_PANEL,
-                fg=tokens.FG_INVERSE if sid == sp_id else tokens.FG_1,
-            )
+        # Delegate row highlight to SelectableList
+        list_widget.set_active(sp_id)
 
         context_var.set(f"Commentary for sub-program: {sp_id}")
         editor.delete("1.0", "end")
         editor.insert("1.0", comments.get(sp_id, ""))
         editor.focus_set()
-
-    # Build list rows
-    for sp_id in sub_programs:
-        has_text = bool(initial.get(sp_id, "").strip())
-        row_lbl = tk.Label(
-            list_inner,
-            text=sp_id,
-            font=bold_font if has_text else normal_font,
-            fg=tokens.FG_1,
-            bg=tokens.BG_PANEL,
-            anchor="w",
-            padx=tokens.SP_3,
-            pady=tokens.SP_2,
-            cursor="hand2",
-        )
-        row_lbl.pack(fill="x")
-        _row_labels[sp_id] = row_lbl
-
-        # Bind click
-        def _make_click(sid: str) -> Callable[..., None]:
-            def _click(*_: Any) -> None:
-                _load_sp(sid)
-
-            return _click
-
-        row_lbl.bind("<Button-1>", _make_click(sp_id))
-
-    # Keyboard navigation — Up/Down on list canvas
-    _sp_list = list(sub_programs)
-
-    def _nav_list(direction: int, event: Any = None) -> str:
-        if not _selected or not _sp_list:
-            if _sp_list:
-                _load_sp(_sp_list[0])
-            return "break"
-        cur_idx = _sp_list.index(_selected[0])
-        new_idx = max(0, min(len(_sp_list) - 1, cur_idx + direction))
-        _load_sp(_sp_list[new_idx])
-        return "break"
-
-    list_canvas.bind("<Up>", lambda e: _nav_list(-1, e))
-    list_canvas.bind("<Down>", lambda e: _nav_list(1, e))
-    list_canvas.bind("<Button-1>", lambda e: list_canvas.focus_set())
-    list_inner.bind("<Up>", lambda e: _nav_list(-1, e))
-    list_inner.bind("<Down>", lambda e: _nav_list(1, e))
 
     # -----------------------------------------------------------------------
     # Auto-save on text change
@@ -1153,11 +1456,60 @@ def CommentaryDialog(  # noqa: N802
     editor.bind("<<Modified>>", _on_text_modified)
 
     # -----------------------------------------------------------------------
-    # Save / Cancel actions
+    # Save / Clear all / OK / Cancel actions
     # -----------------------------------------------------------------------
-    def _do_save(*_: Any) -> None:
-        nonlocal result
+
+    # Status label — shows "Saved" briefly after the Save button is pressed.
+    _save_status_var = tk.StringVar(value="")
+    _save_status_lbl = tk.Label(
+        btn_row,
+        textvariable=_save_status_var,
+        fg=tokens.OK_FG,
+        bg=tokens.BG_PANEL,
+        font=_make_font("Segoe UI", tokens.FS_12),
+        anchor="w",
+    )
+    _save_status_lbl.pack(side="left")
+
+    _save_status_after: list[str | None] = [None]
+
+    def _show_saved_feedback() -> None:
+        """Briefly display 'Saved' next to the button row, then clear."""
+        _save_status_var.set("Saved")
+        if _save_status_after[0] is not None:
+            try:
+                top.after_cancel(_save_status_after[0])
+            except Exception:
+                pass
+        _save_status_after[0] = top.after(1800, lambda: _save_status_var.set(""))
+
+    def _do_save_inplace(*_: Any) -> None:
+        """Flush current edits into the in-memory dict WITHOUT closing the dialog."""
         _save_current_text()
+        _show_saved_feedback()
+
+    def _do_clear_all(*_: Any) -> None:
+        """Clear ALL commentary across ALL sub-programs after user confirmation."""
+        import tkinter.messagebox as _mb
+
+        confirmed = _mb.askyesno(
+            "Clear all commentary?",
+            "This will remove every saved commentary. Continue?",
+            parent=top,
+        )
+        if not confirmed:
+            return
+        comments.clear()
+        # Refresh the editor if a sub-program is currently selected.
+        if _selected:
+            editor.delete("1.0", "end")
+        # Update bold/normal font for every row in the list.
+        for sp_id in sub_programs:
+            _update_row_font(sp_id)
+
+    def _do_ok(*_: Any) -> None:
+        """Commit all edits and close the dialog (OK)."""
+        nonlocal result
         result = dict(comments)
         top.destroy()
 
@@ -1166,11 +1518,30 @@ def CommentaryDialog(  # noqa: N802
         result = None
         top.destroy()
 
-    # Buttons
+    # Buttons — right side: OK (primary accent), Cancel; left: Save, Clear all
     btn_font = _make_font("Segoe UI", tokens.FS_13)
-    save_btn = tk.Button(
+
+    # Save (persist without closing — accent style, primary save action)
+    save_btn = ttk.Button(
         btn_row,
         text="Save",
+        style="Accent.TButton",
+        command=_do_save_inplace,
+    )
+    save_btn.pack(side="left", padx=(tokens.SP_2, tokens.SP_1))
+
+    # Clear all (less prominent — plain ttk.Button)
+    clear_all_btn = ttk.Button(
+        btn_row,
+        text="Clear all",
+        command=_do_clear_all,
+    )
+    clear_all_btn.pack(side="left", padx=(0, tokens.SP_2))
+
+    # OK / Cancel on the right
+    ok_btn = tk.Button(
+        btn_row,
+        text="OK",
         font=btn_font,
         fg=tokens.FG_INVERSE,
         bg=tokens.BRAND_ACCENT,
@@ -1179,10 +1550,10 @@ def CommentaryDialog(  # noqa: N802
         relief="flat",
         padx=tokens.SP_4,
         pady=tokens.SP_2,
-        command=_do_save,
+        command=_do_ok,
         cursor="hand2",
     )
-    save_btn.pack(side="right", padx=(tokens.SP_2, 0))
+    ok_btn.pack(side="right", padx=(tokens.SP_2, 0))
 
     cancel_btn = tk.Button(
         btn_row,
@@ -1204,19 +1575,21 @@ def CommentaryDialog(  # noqa: N802
     # Keyboard shortcuts
     # -----------------------------------------------------------------------
     top.bind("<Escape>", _do_cancel)
-    top.bind("<Control-s>", _do_save)
+    top.bind("<Control-s>", _do_save_inplace)
 
-    # Tab order: list canvas → editor → save → cancel
-    list_canvas.configure(takefocus=True)
+    # Tab order: list canvas -> editor -> save -> clear all -> ok -> cancel
+    list_widget.canvas.configure(takefocus=True)
     editor.configure(takefocus=True)
     save_btn.configure(takefocus=True)
+    clear_all_btn.configure(takefocus=True)
+    ok_btn.configure(takefocus=True)
     cancel_btn.configure(takefocus=True)
 
     # Select first item if available
     if _sp_list:
         _load_sp(_sp_list[0])
 
-    # Window-close protocol → cancel
+    # Window-close protocol -> cancel
     top.protocol("WM_DELETE_WINDOW", _do_cancel)
 
     # Wait for the dialog to close

@@ -15,6 +15,7 @@ from toolkit.base_tool import (
     ToolResult,
 )
 from toolkit.tokens import HL_MISMATCH, HL_SOURCE_ONLY
+from toolkit.user_errors import friendly_error
 from tools.operating import logic
 from tools.operating.logic import OpStatSummary
 
@@ -130,7 +131,9 @@ class OperatingStatementTool:
     pdf_template = None
     pdf_body = None
     help_text = _HELP_TEXT
-    requires_feature = "operating"
+    # TEMPORARY: free-tier launch (Round 15). Restore to "operating" when paid
+    # tier resumes — see docs/03_ROADMAP.md and handoff/round15_*.md.
+    requires_feature = None
 
     inputs: list[Any] = [
         FileInput(
@@ -199,14 +202,19 @@ class OperatingStatementTool:
 
         except Exception as exc:
             tb = traceback.format_exc()
+            fe = friendly_error(exc)
             return ToolResult(
                 status="error",
                 banner_level="danger",
-                banner_text=(f"An error occurred ({type(exc).__name__}): {exc}"),
+                banner_text=fe.banner,
                 log_lines=[
-                    LogLine("ERROR", tag="heading"),
-                    LogLine(f"{type(exc).__name__}: {exc}", tag="danger"),
-                    LogLine(tb, tag="danger"),
+                    LogLine("WHAT WENT WRONG", tag="heading"),
+                    LogLine(fe.message, tag="danger"),
+                    LogLine("HOW TO FIX IT", tag="heading"),
+                    LogLine(fe.advice, tag="muted"),
+                    LogLine("TECHNICAL DETAIL (for support)", tag="heading"),
+                    LogLine(fe.technical, tag="muted"),
+                    LogLine(tb, tag="muted"),
                 ],
                 output_path=None,
             )
@@ -325,3 +333,11 @@ class OperatingStatementTool:
 
     def secondary_actions(self) -> list[tuple[str, object]]:
         return []
+
+    def preview_update(self, key: str, value: float | str) -> None:
+        """No live-preview inputs on this tool; always returns None."""
+        return None
+
+    def clear(self) -> None:
+        """No per-tool state to reset; shell handles UI-level reset."""
+        return None

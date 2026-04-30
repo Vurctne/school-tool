@@ -27,10 +27,10 @@ HOW THE SECURITY CODE IS CALCULATED
 
 The security code is the sum of three parts:
 
-    Security Code  =  SIN  +  (Amount \u00d7 100)  +  DD  +  MM  +  YY
+    Security Code  =  SIN  +  (Amount × 100)  +  DD  +  MM  +  YY
 
   1. SIN — your School Identification Number.
-  2. Amount \u00d7 100 — the transfer amount with the decimal point removed \
+  2. Amount × 100 — the transfer amount with the decimal point removed \
 (cents included). For example, $20,000.00 becomes 2000000.
   3. Date — the day, month, and two-digit year of the request, each added \
 separately.
@@ -48,22 +48,27 @@ WORKED EXAMPLE (from the Department of Education)
 
 USING THIS TOOL
 
-  \u2022 Enter your SIN. Click the eye icon to reveal/hide it. Tick "Remember \
+  • Enter your SIN. Click the eye icon to reveal/hide it. Tick "Remember \
 on this device" to have the SIN securely stored using Windows DPAPI so you \
 don't have to retype it next time.
-  \u2022 Enter the transfer amount (with or without the dollar sign and commas).
-  \u2022 Pick the date of the request \u2014 today by default.
-  \u2022 Click "Generate code". The security code appears in large green type \
-and the calculation breakdown is shown below for your verification. Your SIN \
-is masked (shown as asterisks) in the breakdown.
+  • Enter the transfer amount (with or without the dollar sign and commas).
+  • Pick the date of the request — today by default.
+  • Click "Generate code". The security code appears in large green type. \
+By default the calculation breakdown is hidden so anyone glancing at your \
+screen can't see how the code was assembled.
+  • To verify the calculation, press and HOLD the "Show formula" button \
+under the result. While you hold the left mouse button down, the formula \
+appears next to the button. Release (or move the cursor off the button) \
+and the formula disappears immediately. Your SIN is masked (shown as \
+asterisks) in the formula.
 
 
 IMPORTANT SECURITY NOTES
 
-  \u2022 There is an additional security step in the HYIA Portal: you will be \
+  • There is an additional security step in the HYIA Portal: you will be \
 asked to enter a verification code from information displayed on the portal.
-  \u2022 Never share your SIN by email or messaging apps.
-  \u2022 If your school cannot locate its SIN, the Principal must email \
+  • Never share your SIN by email or messaging apps.
+  • If your school cannot locate its SIN, the Principal must email \
 Westpac at wibce@westpac.com.au to request the current SIN or a new one.
 
 
@@ -71,9 +76,9 @@ SUPPORT
 
   Westpac HYIA queries:       wibce@westpac.com.au
   DoE schools finance help:   schools.finance.support@education.vic.gov.au
-  This tool \u2014 feedback:         Vurctne@gmail.com
+  This tool — feedback:         Vurctne@gmail.com
 
-Source: Department of Education \u2014 High Yield Investment Account (HYIA) \
+Source: Department of Education — High Yield Investment Account (HYIA) \
 Funds Transfer, updated May 2022.
 """
 
@@ -102,13 +107,25 @@ class HyiaTool:
     ]
     output = None  # no file output; result is the code itself
 
+    # Cached formula text — populated on each successful run().  Read by the
+    # press-and-hold "Show formula" button via press_hold_actions().  Empty
+    # string means there is no current result to reveal.  (Round 21)
+    _last_formula: str = ""
+
     def run(self, paths: dict[str, Any], progress: ProgressFn) -> ToolResult:
-        progress(100, "Calculating\u2026")
+        progress(100, "Calculating…")
         sin = int(str(paths["sin"]).strip())
         amount_cents = parse_currency(str(paths["amount"]))
         d: date = paths["date"]  # already a date per shell's DateField resolver
         bd = compute_security_code(sin, amount_cents, d)
         sin_masked = "*" * len(str(bd.sin))  # preserve digit count, hide the value
+        # Cache the formula for the press-and-hold reveal button.  The log
+        # below shows a placeholder line instead of the formula itself —
+        # the user can verify on demand by holding "Show formula".
+        self._last_formula = (
+            f"{sin_masked} + {bd.amount_raw} + {bd.day} + {bd.month}"
+            f" + {bd.year_two_digit} = {bd.code}"
+        )
         return ToolResult(
             status="success",
             banner_level="neutral",
@@ -116,13 +133,33 @@ class HyiaTool:
             metrics=[("Security code", str(bd.code), "ok")],
             log_lines=[
                 LogLine(
-                    f"{sin_masked} + {bd.amount_raw} + {bd.day} + {bd.month}"
-                    f" + {bd.year_two_digit} = {bd.code}",
+                    "Calculation hidden. Press and HOLD 'Show formula' below "
+                    "to reveal it for verification.",
                     tag="muted",
                 ),
             ],
             output_path=None,
         )
+
+    def press_hold_actions(self) -> list[tuple[str, Callable[[], str]]]:
+        """Press-and-hold "Show formula" button (Round 21).
+
+        While the user holds the left mouse button, the cached formula is
+        revealed next to the button.  On release (or pointer leave) the
+        text disappears.  This keeps the calculation off-screen by
+        default — anyone glancing at the screen sees only the final
+        security code, not the SIN-derived breakdown.
+        """
+        return [("Show formula", lambda: self._last_formula)]
+
+    def clear(self) -> None:
+        """Reset cached formula so a stale value can't leak after Clear."""
+        self._last_formula = ""
+        return None
+
+    def preview_update(self, key: str, value: float | str) -> None:
+        """No live-preview inputs on this tool; always returns None."""
+        return None
 
     def secondary_actions(self) -> list[tuple[str, Callable[..., None]]]:
         return []  # Copy is handled shell-side because ToolResult is what it has

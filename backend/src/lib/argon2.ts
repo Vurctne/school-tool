@@ -1,20 +1,24 @@
 /**
- * Argon2id password hashing via hash-wasm.
+ * Argon2id password hashing via hash-wasm — with PBKDF2 fallback.
  *
- * Parameters (per §12 security posture):
+ * Argon2id parameters (per §12 security posture):
  *   memorySize  = 65536 (64 MB)
  *   iterations  = 3
  *   parallelism = 4
  *   outputType  = "encoded"  → $argon2id$v=19$... PHC string
  *
- * Test-environment note:
- *   Miniflare's workerd sandbox blocks dynamic WebAssembly compilation.
- *   When WASM is unavailable the functions fall back to a PBKDF2-SHA-256
- *   scheme (via the Web Crypto API) so that integration tests can exercise
- *   the full HTTP stack.  The fallback format is:
- *     $pbkdf2-sha256$i=310000$<base64-salt>$<base64-hash>
- *   Production Workers always use Argon2id; the fallback is never reached
- *   in an actual deployment.
+ * Fallback note:
+ *   In *some* runtimes (Miniflare test sandbox; certain production Worker
+ *   builds where dynamic WASM compilation is restricted) hash-wasm's
+ *   argon2id throws.  We then fall back to PBKDF2-SHA-256 via Web Crypto.
+ *
+ *   Cloudflare Workers caps PBKDF2 iterations at 100_000 — 310_000 is
+ *   rejected with NotSupportedError.  We sit at the cap; if/when the
+ *   limit changes we can raise.  The fallback format is:
+ *     $pbkdf2-sha256$i=100000$<base64-salt>$<base64-hash>
+ *
+ *   Argon2id errors are logged to console.warn with name+message so
+ *   `wrangler tail` shows whether WASM is silently failing in prod.
  */
 
 import { argon2id, argon2Verify } from "hash-wasm";
@@ -28,7 +32,9 @@ const SALT_LENGTH = 16;
 // ── PBKDF2 fallback (Web Crypto — no WASM required) ──────────────────────────
 
 const PBKDF2_PREFIX = "$pbkdf2-sha256$";
-const PBKDF2_ITERATIONS = 310_000;
+// Cloudflare Workers Web Crypto rejects PBKDF2 iterations > 100_000 with
+// NotSupportedError.  Sit at the cap; revisit if Workers raises the limit.
+const PBKDF2_ITERATIONS = 100_000;
 
 async function pbkdf2Hash(password: string, salt: Uint8Array): Promise<string> {
   const keyMaterial = await crypto.subtle.importKey(
@@ -80,8 +86,11 @@ export async function hashPassword(password: string): Promise<string> {
       hashLength: HASH_LENGTH,
       outputType: "encoded",
     });
-  } catch {
-    // WASM unavailable (test sandbox) — use PBKDF2 fallback
+  } catch (err) {
+    // WASM unavailable (test sandbox or restricted Worker build) — fall back.
+    // Log so `wrangler tail` reveals whether prod is silently degrading.
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.warn({ event: "argon2.hash.fallback_pbkdf2", error: msg });
     return pbkdf2Hash(password, salt);
   }
 }
@@ -95,7 +104,9 @@ export async function verifyPassword(
   }
   try {
     return await argon2Verify({ password, hash });
-  } catch {
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.warn({ event: "argon2.verify.error", error: msg });
     return false;
   }
 }

@@ -96,11 +96,16 @@ def test_run_calls_progress() -> None:
     }
 
     tool.run(paths, progress)
-    progress.assert_called_once_with(100, "Calculating\u2026")
+    progress.assert_called_once_with(100, "Calculating…")
 
 
-def test_run_log_lines() -> None:
-    """run() log_lines contains the breakdown formula with the SIN masked."""
+def test_run_log_lines_show_placeholder_only() -> None:
+    """Round 21 — log_lines no longer contain the formula directly.
+
+    Anyone glancing at the screen should see only the security code, not
+    the SIN-derived breakdown.  The formula is exposed on demand via the
+    press-and-hold "Show formula" button.
+    """
     tool = HyiaTool()
     progress = MagicMock()
 
@@ -114,17 +119,42 @@ def test_run_log_lines() -> None:
 
     assert len(result.log_lines) == 1
     log = result.log_lines[0]
-    # SIN must be masked (not shown in plaintext) but its digit count preserved.
+    # Formula is NOT in the log line directly any more.
     assert "12345" not in log.text
-    assert "*****" in log.text
-    # Amount, components, and final code remain visible for audit.
-    assert "2000000" in log.text
-    assert "2012370" in log.text
+    assert "2000000" not in log.text
+    assert "2012370" not in log.text
+    # Placeholder mentions the press-and-hold button by name.
+    assert "Show formula" in log.text
     assert log.tag == "muted"
 
 
-def test_run_log_lines_masks_six_digit_sin() -> None:
-    """A 6-digit SIN is masked with six asterisks (digit count preserved)."""
+def test_press_hold_formula_text_masks_sin() -> None:
+    """Round 21 — press-and-hold reveal exposes formula text with SIN masked."""
+    tool = HyiaTool()
+    progress = MagicMock()
+
+    paths: dict[str, object] = {
+        "sin": "12345",
+        "amount": "$20,000.00",
+        "date": date(2007, 2, 16),
+    }
+    tool.run(paths, progress)
+
+    actions = tool.press_hold_actions()
+    assert len(actions) == 1
+    label, get_text = actions[0]
+    assert label == "Show formula"
+
+    formula = get_text()
+    # Same audit content as before — only the surface area moved.
+    assert "12345" not in formula
+    assert "*****" in formula
+    assert "2000000" in formula
+    assert "2012370" in formula
+
+
+def test_press_hold_formula_six_digit_sin_masked() -> None:
+    """Round 21 — six-digit SIN masked with six asterisks in revealed formula."""
     tool = HyiaTool()
     progress = MagicMock()
 
@@ -133,12 +163,32 @@ def test_run_log_lines_masks_six_digit_sin() -> None:
         "amount": "$100.00",
         "date": date(2026, 4, 24),
     }
+    tool.run(paths, progress)
 
-    result = tool.run(paths, progress)
+    formula = tool.press_hold_actions()[0][1]()
+    assert "123456" not in formula
+    assert "******" in formula
 
-    log = result.log_lines[0]
-    assert "123456" not in log.text
-    assert "******" in log.text
+
+def test_press_hold_empty_before_run() -> None:
+    """Round 21 — before any run(), the press-hold reveal returns empty."""
+    tool = HyiaTool()
+    formula = tool.press_hold_actions()[0][1]()
+    assert formula == ""
+
+
+def test_clear_resets_cached_formula() -> None:
+    """Round 21 — Clear must wipe the cached formula so it can't leak."""
+    tool = HyiaTool()
+    tool.run(
+        {"sin": "12345", "amount": "$1.00", "date": date(2026, 4, 24)},
+        MagicMock(),
+    )
+    # Sanity — formula is populated after run.
+    assert tool.press_hold_actions()[0][1]() != ""
+    tool.clear()
+    # After Clear, the reveal returns empty.
+    assert tool.press_hold_actions()[0][1]() == ""
 
 
 def test_secondary_actions_empty() -> None:

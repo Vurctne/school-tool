@@ -12,6 +12,7 @@ from toolkit.base_tool import (
     ToolResult,
 )
 from toolkit.tokens import HL_EDITED, HL_MISMATCH, HL_SOURCE_ONLY
+from toolkit.user_errors import friendly_error
 from tools.master_budget import logic
 from tools.master_budget.logic import ImportSummary, suggest_output_name
 
@@ -164,15 +165,21 @@ class MasterBudgetTool:
             self._last_output_path = summary.output_path
             return self._build_result(summary)
 
-        except Exception:
+        except Exception as exc:
             tb = traceback.format_exc()
+            fe = friendly_error(exc)
             return ToolResult(
                 status="error",
                 banner_level="danger",
-                banner_text="An error occurred. See the log below for details.",
+                banner_text=fe.banner,
                 log_lines=[
-                    LogLine("ERROR", tag="heading"),
-                    LogLine(tb, tag="danger"),
+                    LogLine("WHAT WENT WRONG", tag="heading"),
+                    LogLine(fe.message, tag="danger"),
+                    LogLine("HOW TO FIX IT", tag="heading"),
+                    LogLine(fe.advice, tag="muted"),
+                    LogLine("TECHNICAL DETAIL (for support)", tag="heading"),
+                    LogLine(fe.technical, tag="muted"),
+                    LogLine(tb, tag="muted"),
                 ],
                 output_path=None,
             )
@@ -274,6 +281,18 @@ class MasterBudgetTool:
             output_path=summary.output_path,
         )
 
+    def clear(self) -> None:
+        """Reset Master Budget session state.
+
+        The shell handles UI resets (file pickers, banner, log, table).
+        We reset the per-instance cache so the next run starts fresh.
+        """
+        self._last_output_path = None
+
+    def preview_update(self, key: str, value: float | str) -> None:
+        """No live-preview inputs on this tool; always returns None."""
+        return None
+
     def secondary_actions(self) -> list[tuple[str, Callable[..., None]]]:
         # Output naming is automatic, so the old "Create suggested output name"
         # button is gone. "Open output folder" is the one useful action after
@@ -283,8 +302,7 @@ class MasterBudgetTool:
 
     def _open_output_folder(self) -> None:
         """Open the output folder with the generated workbook highlighted."""
-        import subprocess
-        import sys
+        from toolkit.files import open_output_folder
 
         # Tk may be absent in CI -- guard the messagebox import so this method
         # stays callable (headless unit tests exercise it too).
@@ -305,29 +323,4 @@ class MasterBudgetTool:
                     pass
             return
 
-        folder = path.parent
-
-        try:
-            if sys.platform == "win32":
-                # Windows: open Explorer with the generated file highlighted.
-                # Note: ``explorer /select,<path>`` exits with code 1 on
-                # success (Windows quirk), so we do not check the return code.
-                # Pass as a single string so explorer's own parser handles the
-                # quoting correctly for paths with spaces (e.g. OneDrive paths).
-                subprocess.Popen(f'explorer /select,"{path}"')  # noqa: S603,S607
-            elif sys.platform == "darwin":
-                # macOS: -R reveals the file in Finder.
-                subprocess.Popen(["open", "-R", str(path)])  # noqa: S603,S607
-            else:
-                # Linux and other Unix: open the folder in the default manager.
-                subprocess.Popen(["xdg-open", str(folder)])  # noqa: S603,S607
-        except Exception as exc:  # pragma: no cover -- defensive
-            if mb is not None:
-                try:
-                    mb.showerror(
-                        "Open output folder",
-                        f"Could not open the folder automatically.\n\n"
-                        f"Path: {folder}\nReason: {exc}",
-                    )
-                except Exception:
-                    pass
+        open_output_folder(path)

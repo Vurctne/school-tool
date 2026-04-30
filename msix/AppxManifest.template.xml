@@ -27,6 +27,7 @@
 
   <Resources>
     <Resource Language="en-AU" />
+    <Resource Language="en-US" />
   </Resources>
 
   <Applications>
@@ -42,8 +43,16 @@
         Square44x44Logo="Assets\Square44x44Logo.png"
         AppListEntry="default">
         <uap:DefaultTile
+          ShortName="School Tool"
           Wide310x150Logo="Assets\Wide310x150Logo.png"
-          Square71x71Logo="Assets\Square71x71Logo.png" />
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+            <uap:ShowOn Tile="square310x310Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
         <uap:SplashScreen
           Image="Assets\SplashScreen.png"
           BackgroundColor="#185787" />

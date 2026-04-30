@@ -44,11 +44,11 @@ Status legend: 🟢 shipped · 🟠 in development · 🔵 planned · ⚪ explor
 
 | Status | Tool | Notes |
 |---|---|---|
-| ⚪ | EOY Prepayments and Revenue in Advance | Year-end accrual reclassification — identify prepayments (expenses paid this period for next year's benefit) and revenue received in advance, post adjusting journals. From Ivan's running list (added 2026-04-25). |
-| ⚪ | Student Fees Reconciliation | Match fees register against receipts export. Mentioned as an example in `EXTENDING.md`. |
-| ⚪ | Payroll variance | Compare payroll periods against budget allocations. |
-| ⚪ | Fixed Assets register | Depreciation schedule + disposal tracking. |
-| ⚪ | Batch PO generator | Build POs from the Master Budget output for approval upload. |
+| ⚪ | 
+| ⚪ | Family invoice Cases21 import prep
+| ⚪ | Subprogram Budget Variance and Transaction compile
+| ⚪ | PDF to excel Data Cleaner
+| ⚪ | EOY Rev in Advancde and Prepaid Expenses summary
 | ⚪ | Web version of the whole toolkit | Deferred 12–18 months. Registry pattern in `EXTENDING.md` ports 1:1 to React. |
 
 ---

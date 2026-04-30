@@ -86,59 +86,74 @@ authRoutes.post("/register", async (c) => {
   }
   const { email, password, first_name, last_name, school_name, abn } = parsed.data;
 
-  // Enforce email uniqueness
-  const existing = await findUserByEmail(c.env.DB, email);
-  if (existing) {
-    return c.json({ error: "Email already registered" }, 409);
+  // Stage tracking lets `wrangler tail` show which step failed without
+  // leaking exception text to the client (we return a bland 500).
+  let stage = "init";
+  try {
+    stage = "find_user";
+    const existing = await findUserByEmail(c.env.DB, email);
+    if (existing) {
+      return c.json({ error: "Email already registered" }, 409);
+    }
+
+    const userId = ulid("usr");
+    const schoolId = ulid("sch");
+    const createdAt = now();
+
+    stage = "hash_password";
+    const passwordHash = await hashPassword(password);
+
+    stage = "insert_user";
+    await insertUser(c.env.DB, {
+      id: userId,
+      email,
+      password_hash: passwordHash,
+      first_name,
+      last_name,
+      created_at: createdAt,
+    });
+
+    stage = "insert_school";
+    await insertSchool(c.env.DB, {
+      id: schoolId,
+      name: school_name,
+      abn,
+      address: null,
+      suburb: null,
+      postcode: null,
+      state: "VIC",
+      created_by: userId,
+      created_at: createdAt,
+    });
+
+    stage = "link_user_school";
+    await linkUserSchool(c.env.DB, userId, schoolId, "owner");
+
+    stage = "insert_email_token";
+    const emailToken = generateToken();
+    await insertEmailToken(c.env.DB, {
+      token: emailToken,
+      user_id: userId,
+      purpose: "verify",
+      expires_at: addDays(createdAt, 1), // 24-hour TTL
+    });
+
+    stage = "wait_until";
+    // Fire-and-forget email; don't fail the request if it errors
+    c.executionCtx.waitUntil(
+      sendVerificationEmail(c.env, email, emailToken).catch((err: unknown) => {
+        console.error({ event: "mailer.verify.error", error: String(err) });
+      }),
+    );
+
+    console.log({ event: "auth.register", user_id: userId, email });
+
+    return c.json({ ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    console.error({ event: "auth.register.error", stage, error: msg });
+    return c.json({ error: "Internal Server Error" }, 500);
   }
-
-  const userId = ulid("usr");
-  const schoolId = ulid("sch");
-  const createdAt = now();
-
-  const passwordHash = await hashPassword(password);
-
-  await insertUser(c.env.DB, {
-    id: userId,
-    email,
-    password_hash: passwordHash,
-    first_name,
-    last_name,
-    created_at: createdAt,
-  });
-
-  await insertSchool(c.env.DB, {
-    id: schoolId,
-    name: school_name,
-    abn,
-    address: null,
-    suburb: null,
-    postcode: null,
-    state: "VIC",
-    created_by: userId,
-    created_at: createdAt,
-  });
-
-  await linkUserSchool(c.env.DB, userId, schoolId, "owner");
-
-  const emailToken = generateToken();
-  await insertEmailToken(c.env.DB, {
-    token: emailToken,
-    user_id: userId,
-    purpose: "verify",
-    expires_at: addDays(createdAt, 1), // 24-hour TTL
-  });
-
-  // Fire-and-forget email; don't fail the request if it errors
-  c.executionCtx.waitUntil(
-    sendVerificationEmail(c.env, email, emailToken).catch((err: unknown) => {
-      console.error({ event: "mailer.verify.error", error: String(err) });
-    }),
-  );
-
-  console.log({ event: "auth.register", user_id: userId, email });
-
-  return c.json({ ok: true });
 });
 
 // POST /verify-email

@@ -30,6 +30,8 @@ _SANS_BOLD_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
     "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+    "C:/Windows/Fonts/segoeuib.ttf",
+    "C:/Windows/Fonts/arialbd.ttf",
 ]
 
 
@@ -151,6 +153,7 @@ def main() -> None:
         "Square44x44Logo.png": render_square(44),
         "Square71x71Logo.png": render_square(71),
         "Square150x150Logo.png": render_square(150),
+        "Square310x310Logo.png": render_square(310),
         "StoreLogo.png": render_square(50),
         "Wide310x150Logo.png": render_wide(310, 150),
         "SplashScreen.png": render_splash(620, 300),

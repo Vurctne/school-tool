@@ -97,8 +97,13 @@ class TestStructuralConformance:
     def test_primary_button(self) -> None:
         assert OperatingStatementTool.primary_button == "Generate comparison"
 
-    def test_requires_feature(self) -> None:
-        assert OperatingStatementTool.requires_feature == "operating"
+    def test_requires_feature_is_none_round_15(self) -> None:
+        """Round 15 temporary free-tier setting: requires_feature must be None.
+
+        Restore to "operating" when paid tier resumes — see CLAUDE.md Round 15
+        and docs/03_ROADMAP.md.
+        """
+        assert OperatingStatementTool.requires_feature is None
 
     def test_has_run(self) -> None:
         tool = OperatingStatementTool()
@@ -471,9 +476,18 @@ class TestThresholdDefaults:
 
 
 class TestRegistry:
-    def test_tool_registered(self) -> None:
+    def test_tool_not_registered_round_15(self) -> None:
+        """Round 15: Operating Statement is parked - must NOT auto-register.
+
+        Importing tools.operating used to call register() as a side effect,
+        but Round 15 commented that out so the tool doesn't show up in the
+        live rail. Restore the register() call (and rename this test back
+        to test_tool_registered) when paid mode resumes.
+        """
         import tools.operating  # noqa: F401
         from toolkit.registry import _registered
 
         registered_ids = [cls.id for cls in _registered]
-        assert OperatingStatementTool.id in registered_ids
+        assert OperatingStatementTool.id not in registered_ids, (
+            "OperatingStatementTool must NOT auto-register while parked."
+        )

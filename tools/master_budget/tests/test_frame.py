@@ -342,36 +342,34 @@ def test_subprogram_column_codes_appear_in_log() -> None:
         )
 
 
-def test_open_output_folder_uses_string_form_for_win32() -> None:
-    """Bug 1 regression guard: on win32, subprocess.Popen receives a STRING
-    (not a list) so explorer's /select parser handles spaces in OneDrive paths.
+def test_open_output_folder_secondary_action_name() -> None:
+    """secondary_actions() must include 'Open output folder' as the first entry."""
+    tool = MasterBudgetTool()
+    actions = tool.secondary_actions()
+    names = [name for name, _ in actions]
+    assert "Open output folder" in names, (
+        f"'Open output folder' not found in secondary actions: {names}"
+    )
 
-    The previous list form `subprocess.Popen(["explorer", f"/select,{path}"])`
-    triggered Python's `list2cmdline` to quote the whole `/select,<path>`
-    together when the path contains spaces (e.g. `OneDrive - DET Schools`).
-    Explorer.exe doesn't recognise that form and falls back to opening the
-    default Documents folder. The fix passes a single string so Windows
-    `CreateProcess` hands it to explorer's own parser intact.
+
+def test_open_output_folder_delegates_to_shared_helper() -> None:
+    """Master Budget's _open_output_folder must delegate to toolkit.files.open_output_folder.
+
+    The Win32 string-form regression (OneDrive paths with spaces) is now covered
+    by tests/test_files.py::test_open_output_folder_uses_string_form_on_win32.
+    This test just confirms the wiring — MB calls the helper with its stored path.
     """
     tool = MasterBudgetTool()
-    tool._last_output_path = Path(r"C:\Users\foo\OneDrive - DET Schools\file.xlsm")
+    p = Path(r"C:\Users\foo\OneDrive - DET Schools\file.xlsm")
+    tool._last_output_path = p
 
-    with patch("sys.platform", "win32"), patch("subprocess.Popen") as mock_popen:
+    called_with: list[Path] = []
+
+    with patch(
+        "toolkit.files.open_output_folder", side_effect=lambda path: called_with.append(path)
+    ):
         tool._open_output_folder()
 
-    assert mock_popen.called, "subprocess.Popen should have been called on win32"
-    args = mock_popen.call_args.args
-    assert args, "expected at least one positional arg to Popen"
-    cmd = args[0]
-    assert isinstance(cmd, str), (
-        f"Bug 1 regression: subprocess.Popen must receive a STRING (not list) "
-        f'so explorer parses /select,"<path>" correctly when path has spaces; '
-        f"got {type(cmd).__name__}: {cmd!r}"
-    )
-    assert cmd.startswith("explorer /select,"), f"unexpected command form: {cmd!r}"
-    # The path must appear double-quoted within the single command string,
-    # so explorer treats /select, unquoted but the path quoted.
-    assert cmd.count('"') == 2, (
-        f"expected exactly one double-quoted path segment in {cmd!r}; "
-        f"got {cmd.count(chr(34))} double-quote chars"
+    assert called_with == [p], (
+        f"Expected toolkit.files.open_output_folder to be called with {p!r}; got {called_with!r}"
     )

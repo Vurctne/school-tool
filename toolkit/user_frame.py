@@ -27,6 +27,96 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Field label map — used by _humanise_validation_error
+# ---------------------------------------------------------------------------
+
+_FIELD_LABELS: dict[str, str] = {
+    "email": "Email",
+    "password": "Password",
+    "first_name": "First name",
+    "last_name": "Last name",
+    "school_name": "School name",
+    "abn": "ABN",
+    "current_password": "Current password",
+    "new_password": "New password",
+    "old_password": "Current password",
+}
+
+
+def _humanise_validation_error(response_body: dict[str, Any]) -> str:
+    """Convert a zod-style ``{error, issues[]}`` body to a plain-English message.
+
+    Falls back to the raw ``error`` string if the structure is unexpected.
+    """
+    issues: list[dict[str, Any]] = list(response_body.get("issues") or [])
+    if not issues:
+        return str(response_body.get("error") or "Request failed.")
+
+    parts: list[str] = []
+    for issue in issues:
+        path: list[Any] = list(issue.get("path") or [])
+        path_str = ".".join(str(p) for p in path)
+        label = _FIELD_LABELS.get(
+            path_str, path_str.replace("_", " ").title() if path_str else "Field"
+        )
+        code = str(issue.get("code", ""))
+        msg = str(issue.get("message", ""))
+
+        if code == "too_small":
+            min_val = int(issue.get("minimum", 0))
+            type_ = str(issue.get("type", "string"))
+            if type_ == "string":
+                if min_val <= 1:
+                    parts.append(f"{label} cannot be empty.")
+                else:
+                    parts.append(f"{label} must be at least {min_val} characters.")
+            else:
+                parts.append(f"{label} must be at least {min_val}.")
+        elif code == "too_big":
+            max_val = int(issue.get("maximum", 0))
+            parts.append(f"{label} must be at most {max_val} characters.")
+        elif code == "invalid_string":
+            validation = str(issue.get("validation", ""))
+            if validation == "email":
+                parts.append("Please enter a valid email address.")
+            else:
+                parts.append(f"{label} format is not valid.")
+        elif code == "invalid_type":
+            parts.append(f"{label} has the wrong type.")
+        elif msg:
+            parts.append(msg.rstrip(".") + ".")
+        else:
+            parts.append(f"{label} is invalid.")
+
+    return " ".join(parts)
+
+
+def _format_error(status: int, body: dict[str, Any] | str | None) -> str:
+    """Return a user-friendly error string for an API failure.
+
+    Handles zod validation (400 + issues[]), common HTTP status codes,
+    and network failures (status == 0).
+    """
+    if status == 0:
+        return "Could not reach the server. Check your internet connection."
+    if status == 401:
+        return "Sign-in details are incorrect."
+    if status == 409:
+        if isinstance(body, dict):
+            err_text = str(body.get("error") or "").lower()
+            if "already" in err_text or "registered" in err_text or "exists" in err_text:
+                return "An account with this email already exists. Try signing in instead."
+        return "An account with this email already exists. Try signing in instead."
+    if status == 500:
+        return "The server reported an error. Please try again in a moment."
+    if status == 400 and isinstance(body, dict) and body.get("issues"):
+        return _humanise_validation_error(body)
+    if isinstance(body, dict) and body.get("error"):
+        return str(body["error"])
+    return f"HTTP {status}" if status else "Request failed."
+
+
+# ---------------------------------------------------------------------------
 # Internal font helper (duplicates the pattern in primitives to avoid
 # importing FontMap at module level, which creates a circular-ish concern)
 # ---------------------------------------------------------------------------
@@ -38,6 +128,65 @@ def _font(size: int, weight: Literal["normal", "bold"] = "normal") -> tkfont.Fon
 
 def _mono(size: int) -> tkfont.Font:
     return tkfont.Font(family="Cascadia Mono", size=size)
+
+
+# ---------------------------------------------------------------------------
+# Password Entry with Show/Hide toggle
+# ---------------------------------------------------------------------------
+
+
+class _PasswordRow(tk.Frame):
+    """An Entry + Show/Hide text toggle for password input.
+
+    Drop-in replacement for a bare ``tk.Entry(show=...)`` pair: pack or grid
+    the row itself, then bind commands to ``textvariable`` as normal.
+    """
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        textvariable: tk.StringVar,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(parent, bg=tokens.BG_MUTED, **kwargs)
+        self._var = textvariable
+        self._entry = tk.Entry(
+            self,
+            textvariable=textvariable,
+            show="•",
+            font=_font(tokens.FS_13),
+            fg=tokens.FG_1,
+            relief="sunken",
+            bd=1,
+        )
+        self._entry.pack(side="left", fill="x", expand=True)
+        self._toggle_btn = ttk.Button(
+            self,
+            text="Show",
+            width=6,
+            command=self._toggle,
+            takefocus=False,
+        )
+        self._toggle_btn.pack(side="left", padx=(tokens.SP_1, 0))
+        self._visible: bool = False
+
+    def _toggle(self) -> None:
+        self._visible = not self._visible
+        self._entry.config(show="" if self._visible else "•")
+        self._toggle_btn.config(text="Hide" if self._visible else "Show")
+
+    def focus_set(self) -> None:
+        self._entry.focus_set()
+
+    def bind(  # type: ignore[override]
+        self,
+        sequence: str | None = None,
+        func: Any = None,
+        add: Any = None,
+    ) -> str:
+        """Forward event bindings to the inner Entry (e.g. <Return>)."""
+        result: Any = self._entry.bind(sequence, func, add)
+        return str(result) if result is not None else ""
 
 
 # ---------------------------------------------------------------------------
@@ -140,14 +289,66 @@ class UserFrame(tk.Frame):
         self._inner = tk.Frame(canvas, bg=tokens.BG_MUTED)
         self._canvas_win = canvas.create_window((0, 0), window=self._inner, anchor="nw")
 
+        # Debounce after() IDs — cancel-and-reschedule so layout math runs only
+        # once per ~100 ms idle window, not on every pixel of a window-resize drag.
+        # 100 ms raised from 50 ms in Round 14 to reduce flicker frequency.
+        # Matches the pattern used in SelectableList (Round 9) and TkShell tool
+        # frame canvases (Round 11).
+        self._inner_configure_after: str | None = None
+        self._canvas_configure_after: str | None = None
+
+        def _do_inner_configure() -> None:
+            # scrollregion tracks the inner content's natural bbox.  It only
+            # needs updating when the inner frame's children change, not on
+            # every window resize.  (Round 14)
+            self._inner_configure_after = None
+            try:
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            except tk.TclError:
+                pass
+
         def _on_inner_configure(_e: Any) -> None:
-            canvas.configure(scrollregion=canvas.bbox("all"))
+            if self._inner_configure_after is not None:
+                try:
+                    canvas.after_cancel(self._inner_configure_after)
+                except tk.TclError:
+                    pass
+            self._inner_configure_after = canvas.after(100, _do_inner_configure)
+
+        def _do_canvas_configure(w: int) -> None:
+            # Only updates inner window width for horizontal stretch.
+            # scrollregion is NOT recomputed here.  (Round 14)
+            self._canvas_configure_after = None
+            try:
+                canvas.itemconfigure(self._canvas_win, width=w)
+            except tk.TclError:
+                pass
 
         def _on_canvas_configure(e: Any) -> None:
-            canvas.itemconfigure(self._canvas_win, width=e.width)
+            w = e.width
+            if self._canvas_configure_after is not None:
+                try:
+                    canvas.after_cancel(self._canvas_configure_after)
+                except tk.TclError:
+                    pass
+            self._canvas_configure_after = canvas.after(100, lambda: _do_canvas_configure(w))
 
         self._inner.bind("<Configure>", _on_inner_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
+
+        # Scope mousewheel to this canvas: bind_all only while the cursor is
+        # over the canvas so we don't steal scroll events from other tools.
+        def _on_mousewheel(event: tk.Event[tk.Misc]) -> None:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind(
+            "<Enter>",
+            lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel),
+        )
+        canvas.bind(
+            "<Leave>",
+            lambda _e: canvas.unbind_all("<MouseWheel>"),
+        )
 
         # Top-level section header
         hdr_frame = tk.Frame(self._inner, bg=tokens.BG_MUTED)
@@ -284,15 +485,7 @@ class UserFrame(tk.Frame):
         )
         pw_lbl.pack(fill="x")
         pw_var = tk.StringVar()
-        pw_entry = tk.Entry(
-            container,
-            textvariable=pw_var,
-            show="●",
-            font=_font(tokens.FS_13),
-            fg=tokens.FG_1,
-            relief="sunken",
-            bd=1,
-        )
+        pw_entry = _PasswordRow(container, textvariable=pw_var)
         pw_entry.pack(fill="x", pady=(0, tokens.SP_2))
 
         # Buttons
@@ -316,10 +509,6 @@ class UserFrame(tk.Frame):
         reg_frame = tk.Frame(container, bg=tokens.BG_MUTED)
         reg_frame.pack(fill="x")
         reg_frame.pack_forget()
-
-        confirm_frame = tk.Frame(container, bg=tokens.BG_MUTED)
-        confirm_frame.pack(fill="x")
-        confirm_frame.pack_forget()
 
         def _show_err(msg: str) -> None:
             for w in err_frame.winfo_children():
@@ -374,25 +563,22 @@ class UserFrame(tk.Frame):
         def _toggle_register() -> None:
             if reg_frame.winfo_ismapped():
                 reg_frame.pack_forget()
-                confirm_frame.pack_forget()
                 register_btn.configure(text="Register\u2026")
             else:
                 reg_frame.pack(fill="x")
-                confirm_frame.pack(fill="x")
                 register_btn.configure(text="Cancel")
 
         register_btn.configure(command=_toggle_register)
 
-        self._build_registration_form(reg_frame, confirm_frame, email_var, pw_var)
+        self._build_registration_form(reg_frame, email_var, pw_var)
 
     def _build_registration_form(
         self,
         reg_frame: tk.Frame,
-        confirm_frame: tk.Frame,
         email_var: tk.StringVar,
         pw_var: tk.StringVar,
     ) -> None:
-        """Build the inline registration form inside reg_frame/confirm_frame."""
+        """Build the inline registration form inside reg_frame."""
         reg_err_frame = tk.Frame(reg_frame, bg=tokens.BG_MUTED)
         reg_err_frame.pack(fill="x")
 
@@ -406,7 +592,7 @@ class UserFrame(tk.Frame):
                 w.destroy()
             Banner(reg_err_frame, level="ok", text=msg).pack(fill="x", pady=(0, tokens.SP_2))
 
-        def _lbl_entry(parent: tk.Frame, text: str, var: tk.StringVar, show: str = "") -> tk.Entry:
+        def _lbl_entry(parent: tk.Frame, text: str, var: tk.StringVar) -> tk.Entry:
             tk.Label(
                 parent,
                 text=text,
@@ -418,7 +604,6 @@ class UserFrame(tk.Frame):
             entry = tk.Entry(
                 parent,
                 textvariable=var,
-                show=show,
                 font=_font(tokens.FS_13),
                 fg=tokens.FG_1,
                 relief="sunken",
@@ -427,11 +612,47 @@ class UserFrame(tk.Frame):
             entry.pack(fill="x", pady=(0, tokens.SP_2))
             return entry
 
+        def _lbl_password_row(
+            parent: tk.Frame,
+            text: str,
+            var: tk.StringVar,
+            *,
+            hint: str | None = None,
+        ) -> _PasswordRow:
+            """Label + _PasswordRow + optional muted hint label."""
+            tk.Label(
+                parent,
+                text=text,
+                bg=tokens.BG_MUTED,
+                fg=tokens.FG_1,
+                font=_font(tokens.FS_13),
+                anchor="w",
+            ).pack(fill="x")
+            row = _PasswordRow(parent, textvariable=var)
+            row.pack(fill="x", pady=(0, 0 if hint else tokens.SP_2))
+            if hint:
+                tk.Label(
+                    parent,
+                    text=hint,
+                    bg=tokens.BG_MUTED,
+                    fg=tokens.FG_3,
+                    font=_font(tokens.FS_13),
+                    anchor="w",
+                ).pack(fill="x", pady=(0, tokens.SP_2))
+            return row
+
         reg_email_var = email_var  # reuse the email from the outer form
         reg_pw_var = pw_var  # reuse password too
 
-        confirm_pw_var = tk.StringVar()
-        _lbl_entry(confirm_frame, "Confirm password", confirm_pw_var, show="●")
+        # Hint label shown below the (reused) password entry in the register context
+        tk.Label(
+            reg_frame,
+            text="At least 10 characters.",
+            bg=tokens.BG_MUTED,
+            fg=tokens.FG_3,
+            font=_font(tokens.FS_13),
+            anchor="w",
+        ).pack(fill="x", pady=(0, tokens.SP_2))
 
         first_name_var = tk.StringVar()
         _lbl_entry(reg_frame, "First name", first_name_var)
@@ -457,17 +678,13 @@ class UserFrame(tk.Frame):
                 w.destroy()
             email = reg_email_var.get().strip()
             password = reg_pw_var.get()
-            confirm = confirm_pw_var.get()
             first = first_name_var.get().strip()
             last = last_name_var.get().strip()
             school = school_name_var.get().strip()
             abn = abn_var.get().strip()
 
-            if not all([email, password, confirm, first, last, school]):
+            if not all([email, password, first, last, school]):
                 _reg_err("All fields except ABN are required.")
-                return
-            if password != confirm:
-                _reg_err("Passwords do not match.")
                 return
 
             try:
@@ -477,7 +694,13 @@ class UserFrame(tk.Frame):
                 _reg_ok("Check your inbox \u2014 click the verification link, then sign back in.")
                 create_btn.configure(state="disabled")
             except Exception as exc:
-                _reg_err(f"Registration failed: {exc}")
+                # Attempt to extract a structured ApiError for friendly rendering.
+                from toolkit.api_client import ApiError  # noqa: PLC0415
+
+                if isinstance(exc, ApiError):
+                    _reg_err(_format_error(exc.status_code, exc.body))
+                else:
+                    _reg_err(f"Registration failed: {exc}")
 
         create_btn.configure(command=_do_register)
 
@@ -574,15 +797,7 @@ class UserFrame(tk.Frame):
                 font=_font(tokens.FS_13),
                 anchor="w",
             ).pack(fill="x")
-            tk.Entry(
-                cpw_frame,
-                textvariable=var,
-                show="●",
-                font=_font(tokens.FS_13),
-                fg=tokens.FG_1,
-                relief="sunken",
-                bd=1,
-            ).pack(fill="x", pady=(0, tokens.SP_2))
+            _PasswordRow(cpw_frame, textvariable=var).pack(fill="x", pady=(0, tokens.SP_2))
 
         save_btn = ttk.Button(cpw_frame, text="Save password", style="Accent.TButton")
         save_btn.pack(anchor="w", pady=(tokens.SP_1, tokens.SP_2))

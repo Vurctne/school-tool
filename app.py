@@ -16,7 +16,7 @@ def main() -> int:
 
     root = tk.Tk()
     root.title(APP_TITLE)
-    root.geometry("1200x820")
+    root.geometry("1440x900")
     root.minsize(960, 640)
 
     fonts = detect_fonts(root)

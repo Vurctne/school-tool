@@ -1,6 +1,6 @@
 # ORCHESTRATION-STATUS.md
 
-**Last updated:** 2026-04-26 08:00 UTC by orchestrator (Phase 3 DONE — M7 build complete; awaiting Ivan sign-off)
+**Last updated:** 2026-04-28 16:00 UTC by orchestrator (Rounds 15+16 — temporary free-tier launch (all tools free, User tab hidden, Operating + Camps + 4 exploratory tools parked under "In development" rail group), Microsoft Store package prep (Identity wired into AppxManifest, 7 Store icons generated via Pillow script, build_msix_package.ps1 gains -StoreUpload mode producing .msixupload, listing copy + privacy policy drafted in docs/.)
 
 Schema defined in `ORCHESTRATION-PLAN.md` §F. Update on the same commit that introduces phase work.
 
@@ -24,13 +24,19 @@ Schema defined in `ORCHESTRATION-PLAN.md` §F. Update on the same commit that in
 
 | ID | Role | Phase | Scope | Started | Notes |
 |---|---|---|---|---|---|
-| (idle — Phase 3 done; awaiting sign-off) | | | | | |
+| (none) | | | | | imp-11 finished 2026-04-26 09:00 UTC; orchestrator handling Round-7 diagnosis directly |
+
+### Recently closed sub-agents
+
+| ID | Role | Phase | Outcome | Closed |
+|---|---|---|---|---|
+| imp-11 | Implementer | post-Phase-3 polish | done — 4 requested items shipped (password show/hide toggle, "At least 10 characters." hint, `_humanise_validation_error` + `_format_error` for plain-English errors, mousewheel-scoped scrollable canvas). 1 scope-creep item (Confirm-password field) removed by orchestrator in Round 7 — was placed in `confirm_frame` packed AFTER `reg_frame`, so it rendered below the Create account button. | 2026-04-26 09:00 UTC |
 
 ---
 
 ## Cumulative metrics
 
-- Sub-agents dispatched (total): 19
+- Sub-agents dispatched (total): 19 (imp-11 closed; Round 7 diagnosis handled in-line by orchestrator — no new sub-agent)
   - Discovery: 3 (disco-1, disco-2 [paused], disco-3)
   - Implementer: 10 (imp-1 through imp-10)
   - Refactor: 0
