@@ -20,7 +20,13 @@ from toolkit.base_tool import (
 from toolkit.tokens import HL_MISMATCH
 from toolkit.user_errors import friendly_error
 from tools.sub_program import logic
-from tools.sub_program.logic import ReportSummary
+from tools.sub_program.logic import (
+    _ACTION_VALUES,
+    _DRIVER_VALUES,
+    _OUTLOOK_VALUES,
+    ReportSummary,
+    SubProgramLine,
+)
 
 # ---------------------------------------------------------------------------
 # Help text
@@ -683,7 +689,12 @@ class SubProgramBudgetReportTool:
 
     # Per-instance state — initialised lazily on first use to keep __init__() free.
     _last_summary: ReportSummary | None = None
-    _commentary_overrides: dict[str, str] | None = None
+    # Round 51 Phase D — per-sub-program override for the 4-tuple
+    # (notes, driver, outlook, action). Pre-Phase-D the value was a
+    # single string (the freeform commentary); now it's a 4-tuple so
+    # the inline editor's three Comboboxes round-trip cleanly without
+    # needing to encode/decode through the XLSX prefix on every save.
+    _commentary_overrides: dict[str, tuple[str, str, str, str]] | None = None
     _last_output_path: Path | None = None
 
     # Two-phase preview-then-export state.
@@ -1080,19 +1091,46 @@ class SubProgramBudgetReportTool:
                     "_data_row_idx": idx,
                 }
             )
-            # Round 22a — interleave a comment sub-row whenever this line
-            # has a non-empty commentary.  The sub-row inherits the
-            # parent's faculty filter key + over flag so faculty filtering
-            # and over-budget pink fills don't visually orphan the comment
-            # from its data row.  Numeric columns are blanked; the
-            # description column holds the comment text prefixed with a
-            # speech-bubble glyph so the sub-row is unmistakable at a glance.
-            if ln.commentary:
+            # Round 22a / Round 51 Phase D — interleave a comment sub-row
+            # whenever this line has any commentary content (notes OR any
+            # of the structured triplet fields).  The sub-row inherits
+            # the parent's faculty filter key + over flag so faculty
+            # filtering and over-budget pink fills don't visually orphan
+            # the comment from its data row.  Numeric columns are blanked;
+            # the description column holds the speech-bubble glyph + an
+            # optional ``[Action: <value>]`` tag (when set) + the freeform
+            # notes paragraph.  Driver / Outlook are not shown inline —
+            # the editor surfaces them when the user opens the row.
+            has_any_commentary = bool(
+                ln.commentary
+                or ln.commentary_driver
+                or ln.commentary_outlook
+                or ln.commentary_action
+            )
+            if has_any_commentary:
+                # Build the inline display. The default surface is the
+                # Action tag (the most action-relevant) plus the notes
+                # paragraph. Round 1 fix (R51): when Action is blank
+                # but Driver / Outlook is set, fall back to one of those
+                # so the speech-bubble row never looks empty — without
+                # that fallback a user who set only Driver=Ongoing
+                # would see "   💬  " (nothing) until they reopened the
+                # editor.
+                parts: list[str] = []
+                if ln.commentary_action:
+                    parts.append(f"[Action: {ln.commentary_action}]")
+                elif ln.commentary_driver:
+                    parts.append(f"[Driver: {ln.commentary_driver}]")
+                elif ln.commentary_outlook:
+                    parts.append(f"[Outlook: {ln.commentary_outlook}]")
+                if ln.commentary:
+                    parts.append(ln.commentary)
+                inline_text = " ".join(parts) if parts else ""
                 table_rows.append(
                     {
                         "sub_program": "",
                         "account": "",
-                        "description": f"   💬  {ln.commentary}",
+                        "description": f"   💬  {inline_text}",
                         "budget": "",
                         "ytd": "",
                         "variance_amount": "",
@@ -1652,7 +1690,13 @@ class SubProgramBudgetReportTool:
         open_output_folder(self._last_output_path)
 
     def _open_inline_comment_editor(self, row: dict[str, Any]) -> None:
-        """Round 22a - open a small inline comment editor for one table row."""
+        """Round 22a / Round 51 Phase D — inline comment editor.
+
+        Phase D adds three ``ttk.Combobox(state="readonly")`` widgets
+        stacked above the existing ``tk.Text`` Notes widget. The four
+        fields are saved as a 4-tuple in ``_commentary_overrides``;
+        :func:`encode_commentary` only runs at XLSX-write time.
+        """
         try:
             import tkinter as tk
             from tkinter import font as tkfont
@@ -1668,13 +1712,29 @@ class SubProgramBudgetReportTool:
         if not sub_program:
             return
 
-        current: str = ""
+        # Preload the four fields from the in-memory override (if any)
+        # or, failing that, from the cached summary's first matching
+        # line. Matches the pre-Phase-D ordering: override > cached.
+        notes_init = ""
+        driver_init = ""
+        outlook_init = ""
+        action_init = ""
         if self._commentary_overrides and sub_program in self._commentary_overrides:
-            current = self._commentary_overrides[sub_program]
+            notes_init, driver_init, outlook_init, action_init = self._commentary_overrides[
+                sub_program
+            ]
         else:
             for ln in self._cached_summary.lines:
-                if ln.sub_program == sub_program and ln.commentary:
-                    current = ln.commentary
+                if ln.sub_program == sub_program and (
+                    ln.commentary
+                    or ln.commentary_driver
+                    or ln.commentary_outlook
+                    or ln.commentary_action
+                ):
+                    notes_init = ln.commentary
+                    driver_init = ln.commentary_driver
+                    outlook_init = ln.commentary_outlook
+                    action_init = ln.commentary_action
                     break
 
         description = str(row.get("description") or "").strip()
@@ -1683,8 +1743,10 @@ class SubProgramBudgetReportTool:
 
         win = tk.Toplevel(root)
         win.title(title)
-        win.geometry("520x240")
-        win.minsize(380, 180)
+        # Larger than pre-Phase-D (520×240) to accommodate the three
+        # Combobox rows above the Notes editor without crushing them.
+        win.geometry("560x360")
+        win.minsize(420, 300)
         win.transient(root)
         win.grab_set()
 
@@ -1697,26 +1759,101 @@ class SubProgramBudgetReportTool:
             pady=tokens.SP_2,
         ).pack(side="top", fill="x")
 
+        # ----- Structured-triplet form -----
+        # Combobox values include "" as the first option so the user
+        # can clear a previously-set value; the readonly state stops
+        # them typing in arbitrary strings that won't round-trip.
+        form = tk.Frame(win)
+        form.pack(side="top", fill="x", padx=tokens.SP_3, pady=(0, tokens.SP_2))
+
+        def _add_combobox_row(
+            row_idx: int, label_text: str, values: tuple[str, ...], initial: str
+        ) -> ttk.Combobox:
+            tk.Label(
+                form,
+                text=label_text,
+                font=tkfont.Font(family=tokens.FONT_SANS_PRIMARY, size=tokens.FS_13),
+                anchor="w",
+                width=10,
+            ).grid(row=row_idx, column=0, sticky="w", padx=(0, tokens.SP_2), pady=tokens.SP_1)
+            # Round 1 fix (R51): if the initial value is non-empty but
+            # NOT in the canonical values tuple (e.g. a future value
+            # written by a newer version of the tool, or a value
+            # surviving a tuple change), include it once in the
+            # dropdown for this editor session so the user can see
+            # AND keep their existing categorisation. Without this
+            # the Combobox would silently zero the field on open and
+            # destroy the value on Save. ``decode_commentary``'s
+            # unknown-value validation usually catches drift first,
+            # but this is the second line of defence.
+            value_list: tuple[str, ...] = ("",) + values
+            if initial and initial not in value_list:
+                value_list = value_list + (initial,)
+            cb = ttk.Combobox(
+                form,
+                values=value_list,
+                state="readonly",
+                font=tkfont.Font(family=tokens.FONT_SANS_PRIMARY, size=tokens.FS_13),
+            )
+            cb.set(initial)
+            cb.grid(row=row_idx, column=1, sticky="ew", pady=tokens.SP_1)
+            form.grid_columnconfigure(1, weight=1)
+            return cb
+
+        driver_cb = _add_combobox_row(0, "Driver:", _DRIVER_VALUES, driver_init)
+        outlook_cb = _add_combobox_row(1, "Outlook:", _OUTLOOK_VALUES, outlook_init)
+        action_cb = _add_combobox_row(2, "Action:", _ACTION_VALUES, action_init)
+
+        # ----- Notes paragraph -----
+        tk.Label(
+            win,
+            text="Notes:",
+            font=tkfont.Font(family=tokens.FONT_SANS_PRIMARY, size=tokens.FS_13),
+            anchor="w",
+            padx=tokens.SP_3,
+        ).pack(side="top", fill="x")
+
         text = tk.Text(
             win,
             wrap="word",
             font=tkfont.Font(family=tokens.FONT_SANS_PRIMARY, size=tokens.FS_13),
-            height=6,
+            height=5,
         )
         text.pack(side="top", fill="both", expand=True, padx=tokens.SP_3, pady=(0, tokens.SP_2))
-        if current:
-            text.insert("1.0", current)
+        if notes_init:
+            text.insert("1.0", notes_init)
         text.focus_set()
+
+        # Round 2 fix (R51): bind Tab to advance focus from the Notes
+        # Text widget instead of inserting a literal tab character.
+        # Without this, a keyboard-only user typing in Notes can't
+        # reach Save — Tk's default ``Text`` Tab handler inserts
+        # whitespace and the focus never leaves the widget.
+        def _advance_tab_focus(_event: Any) -> str:
+            nxt = text.tk_focusNext()
+            if nxt is not None:
+                nxt.focus()
+            return "break"
+
+        text.bind("<Tab>", _advance_tab_focus)
 
         footer = tk.Frame(win)
         footer.pack(side="bottom", fill="x", padx=tokens.SP_3, pady=tokens.SP_2)
 
         def _do_save() -> None:
-            new_text = text.get("1.0", "end").strip()
+            new_notes = text.get("1.0", "end").strip()
+            new_driver = driver_cb.get().strip()
+            new_outlook = outlook_cb.get().strip()
+            new_action = action_cb.get().strip()
             if self._commentary_overrides is None:
                 self._commentary_overrides = {}
-            if new_text:
-                self._commentary_overrides[sub_program] = new_text
+            if new_notes or new_driver or new_outlook or new_action:
+                self._commentary_overrides[sub_program] = (
+                    new_notes,
+                    new_driver,
+                    new_outlook,
+                    new_action,
+                )
             else:
                 self._commentary_overrides.pop(sub_program, None)
             win.destroy()
@@ -1779,15 +1916,38 @@ class SubProgramBudgetReportTool:
         self._cached_calendar_pct = 0.0
 
     def _merge_commentary_overrides(self, summary: ReportSummary) -> ReportSummary:
+        """Round 51 Phase D — apply the 4-tuple override per sub-program.
+
+        Each override is ``(notes, driver, outlook, action)``. When a
+        sub-program isn't in the override dict the line is returned
+        unchanged.
+
+        Round 1 fix (R51): re-derive ``over_budget_lines`` from the
+        updated ``lines`` so downstream consumers (banner copy, exports,
+        secondary tabs) see the freshly-edited commentary on the
+        over-budget subset, not stale references to the pre-merge
+        ``SubProgramLine`` instances.
+        """
         if not self._commentary_overrides:
             return summary
         from dataclasses import replace
 
-        updated_lines = [
-            replace(
-                ln,
-                commentary=self._commentary_overrides.get(ln.sub_program, ln.commentary),
+        updated_lines: list[SubProgramLine] = []
+        for ln in summary.lines:
+            override = self._commentary_overrides.get(ln.sub_program)
+            if override is None:
+                updated_lines.append(ln)
+                continue
+            notes, driver, outlook, action = override
+            updated_lines.append(
+                replace(
+                    ln,
+                    commentary=notes,
+                    commentary_driver=driver,
+                    commentary_outlook=outlook,
+                    commentary_action=action,
+                )
             )
-            for ln in summary.lines
-        ]
-        return replace(summary, lines=updated_lines)
+        # Re-derive over_budget_lines so it points at the updated objects.
+        updated_over = [ln for ln in updated_lines if ln.is_over]
+        return replace(summary, lines=updated_lines, over_budget_lines=updated_over)

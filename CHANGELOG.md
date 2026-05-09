@@ -5,6 +5,28 @@ is at the top.
 
 ---
 
+## v2.3.0.0 — May 2026
+
+* **Sub-Program Budget Report — structured commentary.** The single
+  freeform Comments box on each sub-program is replaced with three
+  short dropdowns (Driver / Outlook / Action) plus a free-text Notes
+  paragraph. The dropdowns prompt for the things variance-analysis
+  best practice asks every comment to answer: *what kind of variance
+  is this* (Driver: One-time / Ongoing / Structural / Timing-early /
+  Timing-late / Investigating), *what do we expect next* (Outlook:
+  One-time / Expected to continue / Improving / Deteriorating), and
+  *what are we doing about it* (Action: None / Monitor / Investigate
+  / Update forecast). The XLSX output stays in Kate Marshall's
+  12-column shape — the dropdowns are encoded as a short prefix on
+  the Comments cell (e.g. `[Driver: Ongoing | Action: Monitor]
+  Reviewed by council`). The in-app sub-row beside each line shows
+  the Action tag inline (`💬  [Action: Investigate] notes`) when
+  set, suppressing the prefix when the user has only written Notes.
+  Pre-Phase-D files round-trip cleanly: their freeform commentary
+  lands in Notes with the three dropdowns blank.
+
+---
+
 ## v2.2.9.0 — May 2026
 
 * **Sub-Program Budget Report — Bridge waterfall.** The Combined

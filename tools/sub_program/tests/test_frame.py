@@ -10,7 +10,7 @@ from unittest.mock import patch
 from toolkit.base_tool import FileInput, RangeInput
 from toolkit.tokens import HL_MISMATCH
 from tools.sub_program.frame import SubProgramBudgetReportTool
-from tools.sub_program.logic import ReportSummary, SubProgramLine  # noqa: F401 -- used in new tests
+from tools.sub_program.logic import ReportSummary, SubProgramLine
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -500,7 +500,9 @@ class TestClearResetsState:
             faculty_used_pct={},
         )
         tool._last_summary = summary
-        tool._commentary_overrides = {"4001": "A note"}
+        # Round 51 Phase D — override is now a 4-tuple
+        # (notes, driver, outlook, action).
+        tool._commentary_overrides = {"4001": ("A note", "", "", "")}
         tool._last_output_path = tmp_path / "output.xlsx"
 
         tool.clear()
@@ -954,6 +956,9 @@ class TestRound22aInlineCommentary:
         sub_program: str,
         commentary: str,
         is_over: bool = False,
+        commentary_driver: str = "",
+        commentary_outlook: str = "",
+        commentary_action: str = "",
     ) -> SubProgramLine:
         return SubProgramLine(
             sub_program=sub_program,
@@ -966,6 +971,9 @@ class TestRound22aInlineCommentary:
             faculty="Curriculum",
             is_over=is_over,
             commentary=commentary,
+            commentary_driver=commentary_driver,
+            commentary_outlook=commentary_outlook,
+            commentary_action=commentary_action,
         )
 
     def test_comment_subrow_inserted_after_parent_with_commentary(self) -> None:
@@ -1257,3 +1265,222 @@ class TestRound22bViewTabs:
         bridge_spec = tabs[4][1]
         bridge_keys = [c["key"] for c in bridge_spec.columns]
         assert bridge_keys == ["step", "amount", "cumulative", "magnitude"]
+
+
+# ---------------------------------------------------------------------------
+# Round 51 Phase D — structured commentary inline display
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredCommentaryInlineDisplay:
+    """The sub-row description carries the speech-bubble glyph + an
+    optional ``[Action: <value>]`` tag (when set) + the freeform notes.
+    Driver / Outlook are not shown inline — they live in the editor.
+    """
+
+    def _line_full(
+        self,
+        sub_program: str = "4400",
+        notes: str = "",
+        driver: str = "",
+        outlook: str = "",
+        action: str = "",
+        is_over: bool = False,
+    ) -> SubProgramLine:
+        return SubProgramLine(
+            sub_program=sub_program,
+            account="Revenue",
+            description=f"{sub_program} description",
+            budget=Decimal("1000"),
+            ytd=Decimal("500"),
+            remaining=Decimal("500"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=is_over,
+            commentary=notes,
+            commentary_driver=driver,
+            commentary_outlook=outlook,
+            commentary_action=action,
+        )
+
+    def test_action_tag_inline_when_action_set(self) -> None:
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full(notes="Reviewed by council", action="Investigate")
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        # 1 data row + 1 sub-row.
+        assert len(result.table_rows) == 2
+        sub_row = result.table_rows[1]
+        assert sub_row["description"] == "   💬  [Action: Investigate] Reviewed by council"
+
+    def test_no_action_tag_when_action_blank(self) -> None:
+        """Empty action ('' = not categorised) suppresses the tag —
+        keeps the inline view tight when only Notes is set."""
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full(notes="Reviewed by council")
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        assert len(result.table_rows) == 2
+        sub_row = result.table_rows[1]
+        assert sub_row["description"] == "   💬  Reviewed by council"
+
+    def test_action_none_literal_renders_inline(self) -> None:
+        """Literal 'None' Action (user reviewed, no action) is distinct
+        from '' (not categorised) — it still gets the inline tag."""
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full(notes="all good", action="None")
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        sub_row = result.table_rows[1]
+        assert sub_row["description"] == "   💬  [Action: None] all good"
+
+    def test_subrow_appears_for_dropdown_only_no_notes(self) -> None:
+        """Setting only a structured field (e.g. Driver) without Notes
+        should still surface the speech bubble — otherwise the user
+        loses sight of the categorisation."""
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full(driver="Ongoing")  # no notes, no action
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        # 1 data row + 1 sub-row — categorisation alone is enough to
+        # surface the row.
+        assert len(result.table_rows) == 2
+
+    def test_subrow_falls_back_to_driver_when_no_action(self) -> None:
+        """Round 1 fix: when Action is blank but Driver is set, the
+        speech bubble surfaces ``[Driver: X]`` so the row never looks
+        empty. Without this the categorisation is invisible until the
+        user reopens the editor."""
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full(driver="Ongoing")  # no notes, no action
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        sub_row = result.table_rows[1]
+        assert sub_row["description"] == "   💬  [Driver: Ongoing]"
+
+    def test_subrow_falls_back_to_outlook_when_no_action_or_driver(self) -> None:
+        """Final fallback in the chain — when only Outlook is set, it
+        surfaces inline so the row isn't empty."""
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full(outlook="Improving")
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        sub_row = result.table_rows[1]
+        assert sub_row["description"] == "   💬  [Outlook: Improving]"
+
+    def test_subrow_action_takes_priority_over_driver(self) -> None:
+        """When BOTH Action and Driver are set, the inline tag shows
+        Action (the most action-relevant) — Driver is only the
+        fallback. The user can see the categorisation in the editor."""
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full(driver="Ongoing", action="Investigate")
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        sub_row = result.table_rows[1]
+        assert sub_row["description"] == "   💬  [Action: Investigate]"
+
+    def test_no_subrow_when_all_four_fields_blank(self) -> None:
+        tool = SubProgramBudgetReportTool()
+        line = self._line_full()  # everything blank
+        summary = _make_summary(lines=[line])
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_rows is not None
+        # Only the data row — no sub-row when nothing is categorised.
+        assert len(result.table_rows) == 1
+
+
+class TestStructuredCommentaryOverrideMerge:
+    """The 4-tuple override applies through ``_merge_commentary_overrides``."""
+
+    def test_merge_applies_full_tuple(self) -> None:
+        tool = SubProgramBudgetReportTool()
+        line = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Curriculum",
+            budget=Decimal("1000"),
+            ytd=Decimal("500"),
+            remaining=Decimal("500"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        summary = _make_summary(lines=[line])
+        tool._commentary_overrides = {
+            "4001": ("new notes", "Ongoing", "Improving", "Monitor"),
+        }
+        merged = tool._merge_commentary_overrides(summary)
+        ln = merged.lines[0]
+        assert ln.commentary == "new notes"
+        assert ln.commentary_driver == "Ongoing"
+        assert ln.commentary_outlook == "Improving"
+        assert ln.commentary_action == "Monitor"
+
+    def test_merge_skips_lines_without_override(self) -> None:
+        tool = SubProgramBudgetReportTool()
+        line = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Curriculum",
+            budget=Decimal("1000"),
+            ytd=Decimal("500"),
+            remaining=Decimal("500"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+            commentary="existing",
+            commentary_action="Monitor",
+        )
+        summary = _make_summary(lines=[line])
+        tool._commentary_overrides = {"DIFFERENT_SP": ("x", "x", "x", "x")}
+        merged = tool._merge_commentary_overrides(summary)
+        ln = merged.lines[0]
+        assert ln.commentary == "existing"
+        assert ln.commentary_action == "Monitor"
+
+    def test_merge_refreshes_over_budget_lines(self) -> None:
+        """Round 1 fix: ``over_budget_lines`` is re-derived from the
+        updated ``lines`` so downstream consumers (banner copy, exports)
+        see freshly-edited commentary on the over-budget subset, not
+        stale references to the pre-merge instances."""
+        tool = SubProgramBudgetReportTool()
+        # An over-budget line — should be in over_budget_lines before
+        # AND after the merge, but its commentary must be updated.
+        line = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Curriculum",
+            budget=Decimal("1000"),
+            ytd=Decimal("1500"),  # over
+            remaining=Decimal("-500"),
+            used_pct=Decimal("150"),
+            faculty="Curriculum",
+            is_over=True,
+            commentary="",  # no commentary pre-merge
+        )
+        summary = _make_summary(lines=[line], over_budget_lines=[line])
+        tool._commentary_overrides = {
+            "4001": ("now reviewed", "Ongoing", "", "Investigate"),
+        }
+        merged = tool._merge_commentary_overrides(summary)
+        # over_budget_lines points at the UPDATED instance, not the stale one.
+        assert len(merged.over_budget_lines) == 1
+        ob = merged.over_budget_lines[0]
+        assert ob.commentary == "now reviewed"
+        assert ob.commentary_driver == "Ongoing"
+        assert ob.commentary_action == "Investigate"

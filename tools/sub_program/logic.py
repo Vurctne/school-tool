@@ -34,6 +34,180 @@ _COMMENT_SYNONYMS: tuple[str, ...] = (
 )
 
 # ---------------------------------------------------------------------------
+# Round 51 Phase D — structured commentary
+# ---------------------------------------------------------------------------
+# Replaces freeform commentary with three Combobox-backed dropdowns plus
+# a free-text Notes paragraph. The XLSX cell carries an optional prefix
+# of the shape ``[Driver: X | Outlook: Y | Action: Z] notes``; only set
+# fields appear in the prefix, blank fields are omitted. When all three
+# dropdowns are blank the prefix is suppressed entirely so pre-Phase-D
+# files round-trip as Notes-only.
+
+_DRIVER_VALUES: tuple[str, ...] = (
+    "One-time",
+    "Ongoing",
+    "Structural",
+    "Timing-early",
+    "Timing-late",
+    "Investigating",
+)
+_OUTLOOK_VALUES: tuple[str, ...] = (
+    "One-time",
+    "Expected to continue",
+    "Improving",
+    "Deteriorating",
+)
+_ACTION_VALUES: tuple[str, ...] = (
+    "None",
+    "Monitor",
+    "Investigate",
+    "Update forecast",
+)
+
+# Greedy-up-to-first-`]` body match. The body must contain at least one
+# of the three keys to be treated as a structured prefix; otherwise the
+# whole cell falls through to freeform Notes (e.g. ``"[NOTE TO SELF]
+# review later"`` is preserved verbatim, NOT parsed as a prefix).
+_COMMENTARY_PREFIX_RE = re.compile(
+    r"^\[(?P<body>[^\]\n]*)\](?P<rest>.*)$",
+    re.DOTALL,
+)
+_PREFIX_FIELD_RE = re.compile(r"\s*(?P<key>Driver|Outlook|Action)\s*:\s*(?P<val>[^|]*?)\s*(?:\||$)")
+
+
+def encode_commentary(
+    notes: str,
+    driver: str = "",
+    outlook: str = "",
+    action: str = "",
+) -> str:
+    """Encode structured commentary into a single string.
+
+    Used as the value written to the XLSX Comments cell. The prefix is
+    only emitted when at least one structured field is non-empty;
+    otherwise we return the bare notes (preserving backward
+    compatibility with pre-Phase-D files). Blank fields are omitted
+    from the prefix entirely — e.g. ``encode_commentary("n", action="Monitor")``
+    → ``"[Action: Monitor]\\nn"``.
+
+    Edge case: when all three structured fields are blank but the notes
+    paragraph happens to start with ``[``, we emit an empty-body
+    prefix ``[]`` as an escape so :func:`decode_commentary` can later
+    distinguish "user typed a literal bracket" from "structured prefix
+    we couldn't parse".
+
+    Round 1 fix (R51): the prefix and notes are separated by a NEWLINE
+    so when ``wrap_text`` is on the XLSX cell, notes start on their own
+    visual line — the prefix doesn't visually merge into the paragraph
+    when the cell wraps mid-prefix in a 50-char column.
+    :func:`decode_commentary` strips exactly one separator either way,
+    so the round-trip is unaffected.
+
+    Excel-formula-injection guard: this encoder NEVER prepends
+    ``=``/``+``/``-``/``@`` (the Excel formula sigils) — those checks
+    happen at the cell-write site since not every encoder consumer
+    writes to a cell. See ``_write_monthly_sub_program_sheet``.
+    """
+    fields: list[str] = []
+    if driver:
+        fields.append(f"Driver: {driver}")
+    if outlook:
+        fields.append(f"Outlook: {outlook}")
+    if action:
+        fields.append(f"Action: {action}")
+    if not fields:
+        if notes.lstrip().startswith("["):
+            return f"[]\n{notes}"
+        return notes
+    prefix = "[" + " | ".join(fields) + "]"
+    if not notes:
+        return prefix
+    return f"{prefix}\n{notes}"
+
+
+def decode_commentary(text: str) -> tuple[str, str, str, str]:
+    """Inverse of :func:`encode_commentary`.
+
+    Returns ``(notes, driver, outlook, action)``. Anything that doesn't
+    look like a Phase-D prefix is treated as freeform notes — so a
+    pre-Phase-D file with unstructured text round-trips as
+    ``(text, "", "", "")``.
+
+    Round 1 fixes (R51):
+
+    * **Whitespace preservation** — only the prefix-adjacent separator
+      (the single space or newline immediately after ``]``) is stripped.
+      Inner whitespace in the user's notes is preserved so a
+      save→reopen cycle is idempotent.
+    * **Unknown-value validation** — extracted Driver / Outlook / Action
+      values are checked against the canonical
+      :data:`_DRIVER_VALUES` / :data:`_OUTLOOK_VALUES` /
+      :data:`_ACTION_VALUES` tuples. If any value is unknown, the
+      whole text is preserved verbatim as Notes — protects users
+      whose pre-Phase-D commentary happened to contain literal
+      ``[Driver: foo]`` text from being silently mis-parsed and losing
+      part of their note. Also the Editor's Combobox preload then
+      relies on this contract.
+
+    Special cases:
+
+    * ``[] rest`` — empty-body prefix is the encoder's escape for
+      "notes started with ``[`` and dropdowns were blank". We strip
+      ``[]`` and return ``rest`` as Notes.
+    * ``[FREE TEXT] more`` — body without any Phase-D key. Preserved
+      verbatim as Notes (no information loss).
+    """
+    if not text:
+        return "", "", "", ""
+    m = _COMMENTARY_PREFIX_RE.match(text)
+    if m is None:
+        return text, "", "", ""
+    body = m.group("body").strip()
+    rest_raw = m.group("rest")
+    # Strip exactly one separator (newline or space) immediately
+    # following the closing ``]`` — preserves inner whitespace in the
+    # user's notes so encode→decode→encode is idempotent.
+    if rest_raw.startswith("\n") or rest_raw.startswith(" "):
+        rest = rest_raw[1:]
+    else:
+        rest = rest_raw
+    if body == "":
+        # Empty-body prefix = encoder's escape for "[..." in Notes.
+        return rest, "", "", ""
+    # Body must contain at least one Phase-D key, else treat the whole
+    # thing as freeform notes (preserves "[FREE TEXT] more" verbatim).
+    if not any(k in body for k in ("Driver:", "Outlook:", "Action:")):
+        return text, "", "", ""
+    driver = outlook = action = ""
+    for fm in _PREFIX_FIELD_RE.finditer(body):
+        key = fm.group("key")
+        val = fm.group("val").strip()
+        if key == "Driver":
+            driver = val
+        elif key == "Outlook":
+            outlook = val
+        elif key == "Action":
+            action = val
+    # Round 2 fix (R51): preserve unknown values verbatim instead of
+    # discarding the whole prefix. The Round-1 "fall through to Notes
+    # on unknown value" rule collided with the editor's Combobox
+    # preservation (frame.py:_add_combobox_row) and produced a
+    # round-trip data-loss bug — a non-canonical value the editor
+    # preserved was stripped on the next XLSX read, demoting Driver
+    # back into Notes. Trading that for a small pre-Phase-D risk:
+    # freeform text like ``"[Driver: training costs] note"`` will now
+    # extract Driver as ``"training costs"`` instead of staying as
+    # Notes. The ``_DRIVER_VALUES`` / etc tuples remain the source of
+    # truth for the editor's dropdown — a user opening such a row sees
+    # the legacy value AND can re-pick a canonical one — so any
+    # mis-parse is recoverable. The frequency of pre-Phase-D
+    # commentary literally beginning with ``[Driver:`` / ``[Outlook:``
+    # / ``[Action:`` is empirically very low; the frequency of
+    # hand-edited or schema-drifted values is higher.
+    return rest, driver, outlook, action
+
+
+# ---------------------------------------------------------------------------
 # Faculty inference
 # ---------------------------------------------------------------------------
 # Sub-program codes are numeric (e.g. 4001, 8599).
@@ -111,7 +285,19 @@ class SubProgramLine:
     used_pct: Decimal  # 0..100+
     faculty: str | None
     is_over: bool
+    # Round 51 Phase D — ``commentary`` is now FREEFORM NOTES only.
+    # Pre-Phase-D code stored everything in this single field; the new
+    # XLSX prefix carries the structured triplet (driver/outlook/action)
+    # alongside the notes via :func:`encode_commentary`.
     commentary: str = ""
+    # Round 51 Phase D — structured commentary triplet. Each field is
+    # one of the ``_DRIVER_VALUES`` / ``_OUTLOOK_VALUES`` /
+    # ``_ACTION_VALUES`` module-scope tuples, or empty string for
+    # "not categorised" (distinct from the literal ``"None"`` Action,
+    # which means "user reviewed and decided no action needed").
+    commentary_driver: str = ""
+    commentary_outlook: str = ""
+    commentary_action: str = ""
     # New fields -- default to zero so existing callers remain valid.
     last_year_actual: Decimal = Decimal("0")
     last_year_budget: Decimal = Decimal("0")
@@ -627,6 +813,14 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
     Accepted account-column synonyms: account, account code, gl, gl code.
     If none match, the line title / description column is used as the
     secondary join key.
+
+    Phase D round-trip
+    ------------------
+    Cells written by Round 51+ carry an optional structured prefix of
+    the form ``[Driver: X | Outlook: Y | Action: Z] notes``. We return
+    the cell verbatim — :func:`decode_commentary` is applied at the
+    consumer side (``generate_report``) so that pre-Phase-D files
+    (no prefix) still round-trip cleanly as Notes-only.
     """
     if not xlsx_path.exists():
         raise ValueError(f"Comments file not found: {xlsx_path}")
@@ -712,6 +906,17 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
             txt = (
                 str(row[txt_col]).strip() if txt_col < len(row) and row[txt_col] is not None else ""
             )
+            # Round 1 fix (R51): strip the formula-injection-guard
+            # apostrophe written by ``_write_monthly_sub_program_sheet``
+            # when an encoded cell happened to start with ``=``/``+``/
+            # ``-``/``@`` (Excel's formula sigils). Excel renders the
+            # apostrophe as a "force text" marker but openpyxl returns
+            # it verbatim — we strip it back so :func:`decode_commentary`
+            # sees the original encoded value and round-trips cleanly
+            # without accumulating apostrophes across save→reopen→save
+            # cycles.
+            if len(txt) >= 2 and txt[0] == "'" and txt[1] in ("=", "+", "-", "@"):
+                txt = txt[1:]
             # Skip rows that are clearly not data — sub-program codes are
             # purely numeric.  This stops "Total" / blank header artefacts
             # from polluting the dict.
@@ -896,6 +1101,15 @@ def _write_sheet(
     # Data rows start at row 3.
     percent_col = 7
     for row_idx, line in enumerate(lines, start=3):
+        # Round 51 Phase D — encode structured triplet + notes into the
+        # single Comments cell. Cells where all four fields are blank
+        # come out as empty string (matches pre-Phase-D behaviour).
+        encoded_comment = encode_commentary(
+            line.commentary,
+            driver=line.commentary_driver,
+            outlook=line.commentary_outlook,
+            action=line.commentary_action,
+        )
         if is_revenue:
             row_values: list[Any] = [
                 line.sub_program,
@@ -905,7 +1119,7 @@ def _write_sheet(
                 float(line.budget),
                 float(line.ytd),
                 float(line.used_pct),
-                line.commentary,
+                encoded_comment,
             ]
             # Accounting format on Annual budget (col 5) and YTD (col 6).
             currency_cols = {5, 6}
@@ -923,7 +1137,7 @@ def _write_sheet(
                 float(line.ytd),
                 float(line.used_pct),
                 float(uncommitted),
-                line.commentary,
+                encoded_comment,
             ]
             # Accounting format on Annual budget (col 5), YTD (col 6).
             currency_cols = {5, 6}
@@ -1055,7 +1269,15 @@ def _write_monthly_sub_program_sheet(
     exp_y: dict[str, Decimal] = {}
     orders: dict[str, Decimal] = {}
     desc: dict[str, str] = {}
-    comments: dict[str, str] = {}
+    # Round 51 Phase D Round-1 fix — atomic per-sub-program commentary
+    # aggregation. Pre-fix the four fields (notes / driver / outlook /
+    # action) were each independently "first non-empty wins" across
+    # Account-rows of the same sub-program — which produced
+    # cross-row data fabrication (Action from row B alongside Notes
+    # from row A). Now we adopt the WHOLE 4-tuple from the first row
+    # that contributes ANY commentary content, keeping the
+    # categorisation atomic and traceable to a single source row.
+    commentary_tuple: dict[str, tuple[str, str, str, str]] = {}
 
     for ln in lines:
         sp = ln.sub_program
@@ -1074,8 +1296,17 @@ def _write_monthly_sub_program_sheet(
         # with how the in-app Combined view picks its description).
         if ln.description and sp not in desc:
             desc[sp] = ln.description
-        if ln.commentary and sp not in comments:
-            comments[sp] = ln.commentary
+        # Atomic 4-tuple adoption: the row that wins is the first one
+        # that contributes ANY commentary content for the sub-program.
+        if sp not in commentary_tuple and (
+            ln.commentary or ln.commentary_driver or ln.commentary_outlook or ln.commentary_action
+        ):
+            commentary_tuple[sp] = (
+                ln.commentary,
+                ln.commentary_driver,
+                ln.commentary_outlook,
+                ln.commentary_action,
+            )
 
     sub_programs = sorted(set(rev_b.keys()) | set(exp_b.keys()))
 
@@ -1174,10 +1405,36 @@ def _write_monthly_sub_program_sheet(
             c = ws.cell(row=row_idx, column=11, value=float(rev_pct))
             c.number_format = _PERCENT_AS_PERCENT_FMT
 
-        comment_cell = ws.cell(row=row_idx, column=12, value=comments.get(sp, ""))
+        # Round 51 Phase D — encode structured triplet + notes into a
+        # single cell. When all four are blank the encoded form is "",
+        # so existing "no commentary" rows keep producing empty cells.
+        c_notes, c_driver, c_outlook, c_action = commentary_tuple.get(sp, ("", "", "", ""))
+        encoded = encode_commentary(
+            c_notes,
+            driver=c_driver,
+            outlook=c_outlook,
+            action=c_action,
+        )
+        # Round 1 fix (R51): defensive Excel-formula-injection guard.
+        # A user typing ``=SUM(...)`` or ``+1`` (or pasting bank text
+        # starting with ``-`` / ``@``) into Notes would otherwise get
+        # auto-evaluated by Excel on file open, surfacing as ``#NAME?``
+        # or unexpected numerics. We prepend an apostrophe — Excel's
+        # canonical "force text" sigil — when the encoded string starts
+        # with a formula prefix. The apostrophe doesn't appear in the
+        # cell display but is preserved in the stored value, so the
+        # round-trip into ``decode_commentary`` strips it cleanly.
+        if encoded and encoded[0] in ("=", "+", "-", "@"):
+            comment_cell = ws.cell(row=row_idx, column=12, value="'" + encoded)
+        else:
+            comment_cell = ws.cell(row=row_idx, column=12, value=encoded)
         # Round 47: long commentary cells need wrap_text or they
         # overflow horizontally and push the print width past one page.
         comment_cell.alignment = Alignment(wrap_text=True, vertical="top")
+        # Round 1 fix (R51): force the cell to stay text-formatted so a
+        # user pasting "01/04/2026 reviewed" doesn't get auto-coerced
+        # into an Excel date by General-format inference on re-save.
+        comment_cell.number_format = "@"
 
         # Pink fill on rows where Available Balance YTD is negative
         # AND the magnitude meets the dollar materiality floor —
@@ -1383,25 +1640,28 @@ def generate_report(
         comments = load_prior_period_comments(comments_file)
 
     final_lines: list[SubProgramLine] = []
+    from dataclasses import replace as _replace
+
     for ln in lines:
-        commentary = comments.get((ln.sub_program, ln.account), "")
-        if not commentary:
-            commentary = comments.get((ln.sub_program, ln.description), "")
-        if commentary != ln.commentary:
-            ln = SubProgramLine(
-                sub_program=ln.sub_program,
-                account=ln.account,
-                description=ln.description,
-                budget=ln.budget,
-                ytd=ln.ytd,
-                remaining=ln.remaining,
-                used_pct=ln.used_pct,
-                faculty=ln.faculty,
-                is_over=ln.is_over,
-                commentary=commentary,
-                last_year_actual=ln.last_year_actual,
-                last_year_budget=ln.last_year_budget,
-                outstanding_orders=ln.outstanding_orders,
+        # Round 51 Phase D — decode the prior-period cell into the
+        # structured triplet + notes. Pre-Phase-D files (no prefix)
+        # round-trip as Notes-only with the three dropdowns blank.
+        raw = comments.get((ln.sub_program, ln.account), "")
+        if not raw:
+            raw = comments.get((ln.sub_program, ln.description), "")
+        notes, driver, outlook, action = decode_commentary(raw)
+        if (
+            notes != ln.commentary
+            or driver != ln.commentary_driver
+            or outlook != ln.commentary_outlook
+            or action != ln.commentary_action
+        ):
+            ln = _replace(
+                ln,
+                commentary=notes,
+                commentary_driver=driver,
+                commentary_outlook=outlook,
+                commentary_action=action,
             )
         final_lines.append(ln)
 

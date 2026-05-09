@@ -75,7 +75,8 @@ def test_sub_program_clear_resets_session_state() -> None:
     )
 
     tool._last_summary = summary
-    tool._commentary_overrides = {"4001": "Some note"}
+    # Round 51 Phase D — override is now a 4-tuple (notes, driver, outlook, action).
+    tool._commentary_overrides = {"4001": ("Some note", "", "", "")}
     tool._last_output_path = Path("/tmp/output.xlsx")
 
     assert tool._last_summary is not None

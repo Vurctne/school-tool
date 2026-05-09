@@ -919,3 +919,465 @@ class TestPerSectionThreshold:
         assert lines[1].is_over  # 115 > 110
         assert not lines[2].is_over  # 105 < 110
         assert lines[3].is_over  # 115 > 110
+
+
+# ---------------------------------------------------------------------------
+# Round 51 Phase D — structured commentary
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredCommentary:
+    """encode_commentary / decode_commentary round-trip + edge cases."""
+
+    def test_value_tuples_have_designed_shape(self) -> None:
+        """Pin the dropdown values so a stray edit can't silently drift
+        away from the inline editor's Combobox lists."""
+        from tools.sub_program.logic import (
+            _ACTION_VALUES,
+            _DRIVER_VALUES,
+            _OUTLOOK_VALUES,
+        )
+
+        assert _DRIVER_VALUES == (
+            "One-time",
+            "Ongoing",
+            "Structural",
+            "Timing-early",
+            "Timing-late",
+            "Investigating",
+        )
+        assert _OUTLOOK_VALUES == (
+            "One-time",
+            "Expected to continue",
+            "Improving",
+            "Deteriorating",
+        )
+        assert _ACTION_VALUES == (
+            "None",
+            "Monitor",
+            "Investigate",
+            "Update forecast",
+        )
+
+    def test_encode_all_blank_returns_empty(self) -> None:
+        from tools.sub_program.logic import encode_commentary
+
+        assert encode_commentary("") == ""
+
+    def test_encode_notes_only_no_prefix(self) -> None:
+        """Pre-Phase-D shape — no prefix when all dropdowns are blank."""
+        from tools.sub_program.logic import encode_commentary
+
+        assert encode_commentary("Reviewed by council") == "Reviewed by council"
+
+    def test_encode_only_action_emits_minimal_prefix(self) -> None:
+        """Round 1 fix: separator is now newline (not space) so the prefix
+        and notes don't visually merge when the XLSX cell wraps."""
+        from tools.sub_program.logic import encode_commentary
+
+        assert encode_commentary("notes", action="Monitor") == "[Action: Monitor]\nnotes"
+
+    def test_encode_all_three_emits_full_prefix(self) -> None:
+        from tools.sub_program.logic import encode_commentary
+
+        encoded = encode_commentary(
+            "Reviewed by council",
+            driver="Ongoing",
+            outlook="Expected to continue",
+            action="Monitor",
+        )
+        assert encoded == (
+            "[Driver: Ongoing | Outlook: Expected to continue | Action: Monitor]\n"
+            "Reviewed by council"
+        )
+
+    def test_encode_action_none_literal_emits_prefix(self) -> None:
+        """The literal 'None' value (user reviewed, no action) is distinct
+        from '' (not categorised) and must appear in the prefix."""
+        from tools.sub_program.logic import encode_commentary
+
+        assert encode_commentary("done", action="None") == "[Action: None]\ndone"
+
+    def test_encode_escapes_leading_bracket_in_notes(self) -> None:
+        """Notes starting with ``[`` and dropdowns blank -> empty-body
+        escape so the decoder doesn't mis-parse on next read."""
+        from tools.sub_program.logic import encode_commentary
+
+        assert encode_commentary("[Driver: foo] bar") == "[]\n[Driver: foo] bar"
+
+    def test_decode_empty_string(self) -> None:
+        from tools.sub_program.logic import decode_commentary
+
+        assert decode_commentary("") == ("", "", "", "")
+
+    def test_decode_pre_phase_d_freeform_text(self) -> None:
+        """Pre-Phase-D files have no prefix; the entire cell is Notes."""
+        from tools.sub_program.logic import decode_commentary
+
+        assert decode_commentary("Reviewed by council") == (
+            "Reviewed by council",
+            "",
+            "",
+            "",
+        )
+
+    def test_decode_unknown_bracket_preserved_as_notes(self) -> None:
+        """A ``[FREE TEXT]`` opener with no Phase-D keys is treated as
+        Notes, not as a (broken) prefix."""
+        from tools.sub_program.logic import decode_commentary
+
+        assert decode_commentary("[NOTE TO SELF] check next week") == (
+            "[NOTE TO SELF] check next week",
+            "",
+            "",
+            "",
+        )
+
+    def test_decode_full_prefix(self) -> None:
+        from tools.sub_program.logic import decode_commentary
+
+        assert decode_commentary(
+            "[Driver: Ongoing | Outlook: Improving | Action: Monitor] notes"
+        ) == ("notes", "Ongoing", "Improving", "Monitor")
+
+    def test_decode_partial_prefix(self) -> None:
+        """Only some structured fields set — the rest decode as ''."""
+        from tools.sub_program.logic import decode_commentary
+
+        assert decode_commentary("[Action: Investigate] follow up") == (
+            "follow up",
+            "",
+            "",
+            "Investigate",
+        )
+
+    def test_decode_strips_empty_body_escape(self) -> None:
+        """The ``[]`` escape strips correctly and preserves notes."""
+        from tools.sub_program.logic import decode_commentary
+
+        assert decode_commentary("[] [Driver: foo] bar") == (
+            "[Driver: foo] bar",
+            "",
+            "",
+            "",
+        )
+
+    def test_round_trip_full_combination(self) -> None:
+        """Composite round-trip across an array of representative inputs."""
+        from tools.sub_program.logic import decode_commentary, encode_commentary
+
+        cases = [
+            ("", "", "", ""),
+            ("notes only", "", "", ""),
+            ("", "Ongoing", "", ""),
+            ("", "", "Improving", ""),
+            ("", "", "", "Investigate"),
+            ("notes", "Ongoing", "Improving", "Monitor"),
+            ("notes with $1,234.56", "Structural", "Deteriorating", "Update forecast"),
+            ("[brackets in notes]", "", "", ""),  # escape path
+            ("done", "", "", "None"),  # literal None action
+        ]
+        for notes, driver, outlook, action in cases:
+            enc = encode_commentary(notes, driver=driver, outlook=outlook, action=action)
+            assert decode_commentary(enc) == (notes, driver, outlook, action), (
+                f"round-trip failed for {(notes, driver, outlook, action)!r} -> "
+                f"encoded={enc!r}, decoded={decode_commentary(enc)!r}"
+            )
+
+
+class TestStructuredCommentaryPriorPeriodMigration:
+    """Pre-Phase-D prior-period file -> generate_report decodes to Notes only."""
+
+    def test_pre_phase_d_freeform_lands_in_notes_with_blank_dropdowns(self, tmp_path: Path) -> None:
+        """A prior-period file whose Comments column has no Phase-D
+        prefix should round-trip into the new ``commentary`` (Notes)
+        field with the three structured dropdowns left blank."""
+        # Build a minimal pre-Phase-D shaped XLSX.
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.append(["Sub-Program", "Description", "Comments"])
+        ws.append(["4001", "Curriculum", "Reviewed by council"])
+        ws.append(["8599", "Rowing", "Spend on track"])
+        comments_path = tmp_path / "prior_unstructured.xlsx"
+        wb.save(comments_path)
+
+        from tools.sub_program.logic import load_prior_period_comments
+
+        # Reader is unchanged — returns the raw cell text.
+        loaded = load_prior_period_comments(comments_path)
+        assert loaded[("4001", "Curriculum")] == "Reviewed by council"
+        assert loaded[("8599", "Rowing")] == "Spend on track"
+
+    def test_phase_d_encoded_cell_decodes_at_consumer(self, tmp_path: Path) -> None:
+        """A prior-period file from Round 51+ has the structured prefix
+        in the Comments cell. ``decode_commentary`` (called by
+        ``generate_report``) splits it cleanly back into the four
+        fields."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.append(["Sub-Program", "Description", "Comments"])
+        ws.append(
+            [
+                "4001",
+                "Curriculum",
+                "[Driver: Ongoing | Action: Monitor] Reviewed by council",
+            ]
+        )
+        comments_path = tmp_path / "prior_structured.xlsx"
+        wb.save(comments_path)
+
+        from tools.sub_program.logic import (
+            decode_commentary,
+            load_prior_period_comments,
+        )
+
+        loaded = load_prior_period_comments(comments_path)
+        encoded = loaded[("4001", "Curriculum")]
+        notes, driver, outlook, action = decode_commentary(encoded)
+        assert notes == "Reviewed by council"
+        assert driver == "Ongoing"
+        assert outlook == ""
+        assert action == "Monitor"
+
+
+class TestStructuredCommentaryXlsxOutput:
+    """Structured fields round-trip through the XLSX writer."""
+
+    def _line(
+        self,
+        sub_program: str,
+        notes: str = "",
+        driver: str = "",
+        outlook: str = "",
+        action: str = "",
+    ) -> SubProgramLine:
+        return SubProgramLine(
+            sub_program=sub_program,
+            account="Expenditure",
+            description=f"{sub_program} description",
+            budget=Decimal("10000"),
+            ytd=Decimal("4000"),
+            remaining=Decimal("6000"),
+            used_pct=Decimal("40"),
+            faculty="Curriculum",
+            is_over=False,
+            commentary=notes,
+            commentary_driver=driver,
+            commentary_outlook=outlook,
+            commentary_action=action,
+        )
+
+    def test_xlsx_comments_cell_carries_structured_prefix(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        lines = [
+            self._line(
+                "4001",
+                notes="Reviewed by council",
+                driver="Ongoing",
+                action="Monitor",
+            ),
+        ]
+        _write_xlsx(lines, out, period_label="Apr 2026")
+
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        # Header is rows 1-2, data starts row 3. Comments is column 12.
+        cell = ws.cell(row=3, column=12).value
+        # Round 1 fix: separator is now newline so wrap_text renders
+        # notes on their own visual line in the XLSX.
+        assert cell == "[Driver: Ongoing | Action: Monitor]\nReviewed by council"
+
+    def test_xlsx_comments_cell_blank_when_all_fields_blank(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        lines = [self._line("4001")]
+        _write_xlsx(lines, out, period_label="Apr 2026")
+
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        cell = ws.cell(row=3, column=12).value
+        # Empty cell renders as None or "" depending on openpyxl version.
+        assert cell in (None, "")
+
+    def test_xlsx_comments_cell_notes_only_no_prefix(self, tmp_path: Path) -> None:
+        """When only the freeform notes is set, the cell is plain text
+        (no prefix) — preserves pre-Phase-D readability."""
+        out = tmp_path / "out.xlsx"
+        lines = [self._line("4001", notes="Reviewed by council")]
+        _write_xlsx(lines, out, period_label="Apr 2026")
+
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=3, column=12).value == "Reviewed by council"
+
+
+# ---------------------------------------------------------------------------
+# Round 51 Phase D Round-1 fixes — protective behaviours added after the
+# multi-personality audit (logic skeptic, UX critic, Excel QA).
+# ---------------------------------------------------------------------------
+
+
+class TestStructuredCommentaryRound1Fixes:
+    """Targeted tests for the Round-1 protective fixes."""
+
+    def test_decode_preserves_inner_whitespace_in_notes(self) -> None:
+        """encode→decode→encode is idempotent — ``decode_commentary``
+        only strips the prefix-adjacent separator, not user whitespace."""
+        from tools.sub_program.logic import decode_commentary, encode_commentary
+
+        notes = "  multi-line\n  with leading spaces  "
+        encoded = encode_commentary(notes, action="Monitor")
+        decoded = decode_commentary(encoded)
+        assert decoded == (notes, "", "", "Monitor")
+        # Idempotent — re-encoding the decoded tuple matches the original.
+        re_encoded = encode_commentary(decoded[0], action=decoded[3])
+        assert re_encoded == encoded
+
+    def test_decode_preserves_unknown_driver_value(self) -> None:
+        """Round 2 fix (R51): unknown Driver value (typo, schema drift,
+        third-party edit) is preserved verbatim in the tuple instead
+        of falling through to Notes. Avoids round-trip data loss when
+        the editor's Combobox preserves a non-canonical value across a
+        save→reopen cycle."""
+        from tools.sub_program.logic import decode_commentary
+
+        # "FooBar" is not in _DRIVER_VALUES but we still extract it.
+        text = "[Driver: FooBar] my actual note"
+        assert decode_commentary(text) == ("my actual note", "FooBar", "", "")
+
+    def test_decode_preserves_unknown_outlook_value(self) -> None:
+        from tools.sub_program.logic import decode_commentary
+
+        text = "[Outlook: HopefullyOk] some note"
+        assert decode_commentary(text) == ("some note", "", "HopefullyOk", "")
+
+    def test_decode_preserves_unknown_action_value(self) -> None:
+        from tools.sub_program.logic import decode_commentary
+
+        text = "[Action: ReorderEverything] note"
+        assert decode_commentary(text) == ("note", "", "", "ReorderEverything")
+
+    def test_decode_mixed_known_and_unknown_preserves_both(self) -> None:
+        """Round 2 fix: known + unknown values in same prefix are both
+        extracted — the editor surfaces them and lets the user re-pick."""
+        from tools.sub_program.logic import decode_commentary
+
+        # Driver is canonical, Action is not — both preserved.
+        text = "[Driver: Ongoing | Action: Reorder] note"
+        assert decode_commentary(text) == ("note", "Ongoing", "", "Reorder")
+
+    def test_decode_accepts_space_or_newline_separator(self) -> None:
+        """Pre-Round-1 cells used a space separator; Round-1+ cells use
+        a newline. Decoder tolerates both for forward / backward compat."""
+        from tools.sub_program.logic import decode_commentary
+
+        space_form = "[Action: Monitor] notes"
+        newline_form = "[Action: Monitor]\nnotes"
+        assert decode_commentary(space_form) == ("notes", "", "", "Monitor")
+        assert decode_commentary(newline_form) == ("notes", "", "", "Monitor")
+
+    def test_xlsx_atomic_per_subprogram_no_cross_row_fabrication(self, tmp_path: Path) -> None:
+        """When a sub-program has multiple Account-rows with conflicting
+        commentary, the writer adopts the WHOLE 4-tuple from one row
+        (the first non-empty contributor) — never mixing notes from
+        row A with Action from row B."""
+        # Row A on Revenue side has notes only.
+        # Row B on Expenditure side has structured fields only.
+        # Pre-fix the writer would have produced a fabricated combination.
+        line_a = SubProgramLine(
+            sub_program="4001",
+            account="Revenue",
+            description="Curriculum",
+            budget=Decimal("10000"),
+            ytd=Decimal("4000"),
+            remaining=Decimal("6000"),
+            used_pct=Decimal("40"),
+            faculty="Curriculum",
+            is_over=False,
+            commentary="row A note",
+        )
+        line_b = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Curriculum",
+            budget=Decimal("10000"),
+            ytd=Decimal("4000"),
+            remaining=Decimal("6000"),
+            used_pct=Decimal("40"),
+            faculty="Curriculum",
+            is_over=False,
+            commentary_action="Investigate",
+        )
+        out = tmp_path / "atomic.xlsx"
+        _write_xlsx([line_a, line_b], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        cell = ws.cell(row=3, column=12).value
+        # Cell carries row A's notes only (row A came first), NOT a
+        # fabricated "[Action: Investigate]\nrow A note" combination.
+        assert cell == "row A note"
+
+    def test_xlsx_formula_injection_guard_prepends_apostrophe(self, tmp_path: Path) -> None:
+        """A user typing '=SUM(D3:E3) outdated' into Notes must NOT
+        become a live Excel formula. The writer prepends an apostrophe
+        — Excel renders the cell as text on display."""
+        line = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Curriculum",
+            budget=Decimal("10000"),
+            ytd=Decimal("4000"),
+            remaining=Decimal("6000"),
+            used_pct=Decimal("40"),
+            faculty="Curriculum",
+            is_over=False,
+            commentary="=SUM(D3:E3) outdated",
+        )
+        out = tmp_path / "formula_guard.xlsx"
+        _write_xlsx([line], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        cell = ws.cell(row=3, column=12)
+        assert cell.value == "'=SUM(D3:E3) outdated"
+        # Cell is text-formatted, not a formula.
+        assert cell.data_type == "s"
+        assert cell.number_format == "@"
+
+    def test_xlsx_formula_guard_applies_to_other_sigils(self, tmp_path: Path) -> None:
+        """``=`` is the canonical formula prefix but Excel also evaluates
+        ``+``, ``-``, and ``@`` — guard them all."""
+        for sigil in ("+", "-", "@"):
+            line = SubProgramLine(
+                sub_program="4001",
+                account="Expenditure",
+                description="Curriculum",
+                budget=Decimal("10000"),
+                ytd=Decimal("4000"),
+                remaining=Decimal("6000"),
+                used_pct=Decimal("40"),
+                faculty="Curriculum",
+                is_over=False,
+                commentary=f"{sigil}danger",
+            )
+            out = tmp_path / f"formula_guard_{sigil!r}.xlsx"
+            _write_xlsx([line], out, period_label="Apr 2026")
+            wb = openpyxl.load_workbook(out, data_only=True)
+            ws = wb["Sub Program Report"]
+            cell = ws.cell(row=3, column=12)
+            assert cell.value == f"'{sigil}danger", f"sigil {sigil!r} should be guarded"
+
+    def test_load_prior_period_strips_apostrophe_guard(self, tmp_path: Path) -> None:
+        """The reader strips the formula-guard apostrophe so
+        ``decode_commentary`` sees the original encoded value — and the
+        round-trip doesn't accumulate apostrophes across save→reopen."""
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.append(["Sub-Program", "Description", "Comments"])
+        ws.append(["4001", "Curriculum", "'=danger formula"])
+        comments_path = tmp_path / "guarded.xlsx"
+        wb.save(comments_path)
+
+        loaded = load_prior_period_comments(comments_path)
+        assert loaded[("4001", "Curriculum")] == "=danger formula"
