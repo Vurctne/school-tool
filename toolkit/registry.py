@@ -17,9 +17,9 @@ _registered: list[type[BaseTool]] = []
 IN_DEVELOPMENT_TOOLS: list[tuple[str, str, str, str]] = [
     (
         "Reconciliation",
-        "Operating Statement",
-        "OS",
-        "Temporarily parked for testing — will return after validation.",
+        "Fortnightly Salary Comparison",
+        "FS",
+        "In development — fortnightly salary variance check across pay periods.",
     ),
     (
         "Reconciliation",

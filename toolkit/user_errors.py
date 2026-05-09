@@ -76,11 +76,63 @@ class FriendlyError:
 # ---------------------------------------------------------------------------
 
 
+# Round 37 — Friendly labels for the file-picker keys each tool uses.
+# When a tool's run() is invoked with one of these keys missing from the
+# `paths` dict (i.e. the user clicked Generate without picking a file),
+# Python raises ``KeyError: '<key>'``.  The translator below maps each
+# key to the human-readable label shown next to its file picker.
+#
+# Add a new entry whenever a tool gets a new required FileInput.
+_INPUT_KEY_LABELS: dict[str, str] = {
+    # Sub-Program Budget Report
+    "report_file": "Sub-Program report (the CASES21 GL21157 PDF or XLSX)",
+    "comments_file": "prior-period comments file (optional)",
+    # HYIA Transfer Code
+    "sin": "SIN",
+    "amount": "transfer amount",
+    "date": "transfer date",
+    # Master Budget Compass Autofill / Compare
+    "expense_file": "Compass Expense file",
+    "master_file": "Master Budget template (or Master Budget A in Compare mode)",
+    "master_file_b": "Master Budget B",
+    # Operating Statement
+    "current_file": "current-period operating statement PDF",
+    "prior_file": "prior-period operating statement PDF",
+    # SRP Comparison
+    "prev_year_revised_pdf": "Previous Year — Revised Budget PDF",
+    "indicative_pdf": "Indicative Budget PDF",
+    "confirmed_pdf": "Confirmed Budget PDF",
+    "revised_pdf": "Revised Budget PDF",
+}
+
+
 def friendly_error(exc: Exception) -> FriendlyError:
     """Translate ``exc`` into a FriendlyError users can act on."""
     text = str(exc)
     lower = text.lower()
     technical = f"{type(exc).__name__}: {text}"
+
+    # ----- Missing input field (Round 37) -------------------------------
+    # ``KeyError`` raised by ``paths["foo"]`` when the user clicked the
+    # primary button without filling in the "foo" field.  Surface a clear
+    # "fill in X first" message instead of the support fallback.
+    if isinstance(exc, KeyError):
+        # KeyError stringifies its key with quotes — strip them.
+        key = text.strip("'\"")
+        label = _INPUT_KEY_LABELS.get(key, key)
+        return FriendlyError(
+            banner=f"Please fill in the {label} before running this tool.",
+            message=(
+                f"This tool needs the {label} before it can run.  The "
+                "field is empty right now, so there's nothing to process."
+            ),
+            advice=(
+                f"Fill in the '{label}' field above (Browse for a file, or "
+                "type a value, depending on the field), then click the "
+                "primary button again."
+            ),
+            technical=technical,
+        )
 
     # ----- File system: not found ----------------------------------------
     if isinstance(exc, FileNotFoundError) or "file not found" in lower:
@@ -221,7 +273,7 @@ def friendly_error(exc: Exception) -> FriendlyError:
         advice=(
             "Try running the tool again.  If the same error comes back, "
             "send a screenshot of this screen plus the log to "
-            "Vurctne@gmail.com and we'll take a look."
+            "feedback@schooltool.com.au and we'll take a look."
         ),
         technical=technical,
     )

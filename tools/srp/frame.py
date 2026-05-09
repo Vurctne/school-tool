@@ -86,9 +86,9 @@ number in the PDF and is excluded from the comparison.
 
 SUPPORT
 
-  This tool -- feedback and questions:   Vurctne@gmail.com
+  This tool -- feedback and questions:   feedback@schooltool.com.au
 
-Please send feedback to Vurctne@gmail.com
+Please send feedback to feedback@schooltool.com.au
 """
 
 # ---------------------------------------------------------------------------
@@ -137,24 +137,30 @@ class SrpComparisonTool:
     # No requires_feature -- this is a free tool
 
     inputs: list[Any] = [
+        # Round 41 — restructured from "4 versions of one year" to
+        # "previous year's settled baseline + 3 versions of the current
+        # year".  This matches how Vic schools actually compare SRPs
+        # at year-start budget planning: last year's Revised number is
+        # the carry-forward baseline they're tracking against the new
+        # year's Indicative → Confirmed → Revised progression.
+        FileInput(
+            key="prev_year_revised_pdf",
+            label="Previous Year — Revised Budget (optional)",
+            filetypes=[("PDF", "*.pdf"), ("All files", "*.*")],
+        ),
         FileInput(
             key="indicative_pdf",
-            label="Indicative SRP (optional)",
+            label="Indicative Budget (optional)",
             filetypes=[("PDF", "*.pdf"), ("All files", "*.*")],
         ),
         FileInput(
             key="confirmed_pdf",
-            label="Confirmed SRP (optional)",
+            label="Confirmed Budget (optional)",
             filetypes=[("PDF", "*.pdf"), ("All files", "*.*")],
         ),
         FileInput(
-            key="revised1_pdf",
-            label="1st Revised SRP (optional)",
-            filetypes=[("PDF", "*.pdf"), ("All files", "*.*")],
-        ),
-        FileInput(
-            key="revised2_pdf",
-            label="2nd Revised SRP (optional)",
+            key="revised_pdf",
+            label="Revised Budget (optional)",
             filetypes=[("PDF", "*.pdf"), ("All files", "*.*")],
         ),
     ]
@@ -175,19 +181,23 @@ class SrpComparisonTool:
                 raw = paths.get(key) or ""
                 return Path(raw) if str(raw).strip() else None
 
+            # Round 41 — keys renamed: prev_year_revised / indicative /
+            # confirmed / revised.  Canonical order is chronological:
+            # last year's settled baseline first, then this year's
+            # Indicative → Confirmed → Revised progression.
+            prev_y = _opt("prev_year_revised_pdf")
             ind = _opt("indicative_pdf")
             conf = _opt("confirmed_pdf")
-            rev1 = _opt("revised1_pdf")
-            rev2 = _opt("revised2_pdf")
+            rev = _opt("revised_pdf")
 
             # Build the ordered list of provided versions (canonical order)
             provided: list[tuple[str, Path]] = [
                 (label, p)
                 for label, p in [
+                    ("Previous Year Revised", prev_y),
                     ("Indicative", ind),
                     ("Confirmed", conf),
-                    ("1st Revised", rev1),
-                    ("2nd Revised", rev2),
+                    ("Revised", rev),
                 ]
                 if p is not None
             ]
@@ -222,13 +232,18 @@ class SrpComparisonTool:
             year = _guess_year(first_path.stem)
             output_file = first_path.with_name(f"SRP_Compare_{year}_{ts}.xlsx")
 
+            # Round 41 — UI keys renamed but logic kwargs unchanged.
+            # ``prev_year_revised_pdf`` (new UI) → revised2_pdf slot
+            # ``revised_pdf`` (new UI) → revised1_pdf slot
+            # The slot LABELS render as "Previous Year Revised" /
+            # "Revised" via _SLOT_LABELS (Round 41).
             summary: SrpSummary = logic.generate_srp_comparison(
                 output_file=output_file,
                 progress=progress,
                 indicative_pdf=ind,
                 confirmed_pdf=conf,
-                revised1_pdf=rev1,
-                revised2_pdf=rev2,
+                revised1_pdf=rev,
+                revised2_pdf=prev_y,
             )
 
             # Record output path for "Open output folder"
@@ -340,12 +355,14 @@ class SrpComparisonTool:
             {"key": "description", "label": "Description"},
         ]
 
-        # One column per version
+        # One column per version.  The slot keys are unchanged
+        # (indicative/confirmed/revised1/revised2); only the labels
+        # have moved to the new naming.
         slot_key_map = {
             "Indicative": "indicative",
             "Confirmed": "confirmed",
-            "1st Revised": "revised1",
-            "2nd Revised": "revised2",
+            "Revised": "revised1",
+            "Previous Year Revised": "revised2",
         }
         for lbl in summary.version_labels:
             col_key = slot_key_map.get(lbl, lbl.lower().replace(" ", "_"))
@@ -453,7 +470,7 @@ class SrpComparisonTool:
         if self._last_output_path is None:
             messagebox.showinfo(
                 "No output yet",
-                "Run 'Generate comparison' first, then open the output folder.",
+                "Run 'Generate comparison' first, then o",
             )
             return
         open_output_folder(self._last_output_path)

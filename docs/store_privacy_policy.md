@@ -1,8 +1,8 @@
 # School Tool — Privacy Policy
 
-**Last updated:** 2026-04-28
+**Last updated:** 2026-05-02
 **Publisher:** Vurctne
-**Contact:** Vurctne@gmail.com
+**Contact:** feedback@schooltool.com.au
 
 ---
 
@@ -79,8 +79,7 @@ do not knowingly collect information from children under any age.
 
 ## Updates to this policy
 
-If our practices change in the future — for example, if a future paid tier is reintroduced
-that requires server-side licence verification — this policy will be updated and the
+If our practices change in the future, this policy will be updated and the
 previous version will remain accessible in the project's source control history. Material
 changes will be reflected in a new "Last updated" date at the top of this page and noted
 in the app's Store listing description.
@@ -91,7 +90,7 @@ in the app's Store listing description.
 
 Questions, concerns, or requests can be sent to:
 
-**Vurctne@gmail.com**
+**feedback@schooltool.com.au**
 
 We do our best to respond within a few business days.
 

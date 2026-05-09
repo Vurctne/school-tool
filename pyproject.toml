@@ -15,6 +15,15 @@ dependencies = [
     "httpx>=0.27",
     "python-dateutil>=2.9",
     "cryptography>=42",
+    # Round 30 — Microsoft Store update check on app startup. The
+    # winrt-runtime + Windows.Services.Store namespace expose the
+    # WinRT StoreContext API we need to ask the OS whether any package
+    # updates are pending. Windows-only; toolkit/updates.py guards the
+    # import and falls through to None silently when missing.
+    "winrt-runtime>=2.0; platform_system == 'Windows'",
+    "winrt-Windows.Services.Store>=2.0; platform_system == 'Windows'",
+    "winrt-Windows.Foundation>=2.0; platform_system == 'Windows'",
+    "winrt-Windows.Foundation.Collections>=2.0; platform_system == 'Windows'",
 ]
 
 [project.optional-dependencies]

@@ -102,7 +102,16 @@ class SectionHeader(ttk.Frame):
 
 
 class FileRow(ttk.Frame):
-    """190 px label column + read-only entry (mono) + Browse button."""
+    """Label-on-top file picker with fixed-width entry + Browse button.
+
+    Round 40b — switched from inline label (26-char column, which
+    truncated longer labels like "Compass Expense file (used by
+    Generate budget workbook)") to stacked layout: label spans the
+    full row above, entry + Browse sit on row 2 at a fixed width.
+
+    Override ``width=`` to change the entry width (default 60 chars
+    fits typical Windows paths like ``C:\\Users\\…\\Master Budget.xlsm``).
+    """
 
     def __init__(
         self,
@@ -112,6 +121,7 @@ class FileRow(ttk.Frame):
         filetypes: list[tuple[str, str]],
         initial_path: Path | None = None,
         optional: bool = False,
+        width: int = 60,
         **kwargs: Any,
     ) -> None:
         super().__init__(parent, **kwargs)
@@ -120,26 +130,28 @@ class FileRow(ttk.Frame):
         self._filetypes = filetypes
         self._var = tk.StringVar(value=str(initial_path) if initial_path else "")
 
-        # Label column — fixed 190 px
+        # Round 40b — full-width label on its own row.
         label_text = label if not optional else f"{label} (optional)"
         lbl = tk.Label(
             self,
             text=label_text,
-            width=26,  # ~190 px at 13 px font
             anchor="w",
             fg=tokens.FG_1,
             bg=tokens.BG_MUTED,
             font=_make_font("Segoe UI", tokens.FS_13),
         )
-        lbl.pack(side="left", padx=(0, tokens.SP_3))
+        lbl.pack(side="top", fill="x")
 
-        # Read-only entry (Cascadia Mono / Consolas)
-        entry_frame = tk.Frame(self, bg=tokens.BG_MUTED)
-        entry_frame.pack(side="left", fill="x", expand=True, padx=(0, tokens.SP_3))
+        # Round 40b — entry + Browse on row 2, anchored left.  No
+        # fill="x"/expand=True so the entry stays at its declared
+        # width regardless of panel width.
+        row = tk.Frame(self, bg=tokens.BG_MUTED)
+        row.pack(side="top", anchor="w")
 
         self._entry = tk.Entry(
-            entry_frame,
+            row,
             textvariable=self._var,
+            width=width,
             state="readonly",
             readonlybackground=tokens.BG_READONLY,
             fg=tokens.FG_1,
@@ -147,10 +159,9 @@ class FileRow(ttk.Frame):
             relief="sunken",
             bd=1,
         )
-        self._entry.pack(fill="x")
+        self._entry.pack(side="left", padx=(0, tokens.SP_3))
 
-        # Browse button
-        self._browse_btn = ttk.Button(self, text="Browse", command=self._browse)
+        self._browse_btn = ttk.Button(row, text="Browse", command=self._browse)
         self._browse_btn.pack(side="left")
 
     def _browse(self) -> None:
@@ -178,7 +189,13 @@ class FileRow(ttk.Frame):
 
 
 class TextField(ttk.Frame):
-    """Labelled text entry with optional placeholder and max_length."""
+    """Labelled text entry with optional placeholder and max_length.
+
+    Round 40 — entry width is now fixed (default 32 chars, override
+    via ``width=``). The label still spans the full parent width so
+    the input row aligns left; only the Entry box is capped, which
+    stops it from stretching to the whole panel on wide windows.
+    """
 
     def __init__(
         self,
@@ -187,6 +204,7 @@ class TextField(ttk.Frame):
         value: str = "",
         placeholder: str = "",
         max_length: int | None = None,
+        width: int = 32,
         **kwargs: Any,
     ) -> None:
         super().__init__(parent, **kwargs)
@@ -208,12 +226,15 @@ class TextField(ttk.Frame):
         self._entry = tk.Entry(
             self,
             textvariable=self._var,
+            width=width,
             fg=tokens.FG_1,
             font=_make_font("Segoe UI", tokens.FS_13),
             relief="sunken",
             bd=1,
         )
-        self._entry.pack(side="top", fill="x")
+        # Round 40 — anchor="w" instead of fill="x" so the entry stays
+        # at its declared width on the left of the row.
+        self._entry.pack(side="top", anchor="w")
 
         if max_length is not None:
             self._var.trace_add("write", self._enforce_max)
@@ -253,7 +274,11 @@ class TextField(ttk.Frame):
 
 
 class NumberField(ttk.Frame):
-    """Numeric entry with optional min/max validation and decimal places."""
+    """Numeric entry with optional min/max validation and decimal places.
+
+    Round 40 — entry width is fixed (default 12 chars, suitable for
+    "999,999.99" with breathing room). Override via ``width=``.
+    """
 
     def __init__(
         self,
@@ -263,6 +288,7 @@ class NumberField(ttk.Frame):
         min_value: float | None = None,
         max_value: float | None = None,
         decimals: int = 0,
+        width: int = 12,
         **kwargs: Any,
     ) -> None:
         super().__init__(parent, **kwargs)
@@ -286,6 +312,7 @@ class NumberField(ttk.Frame):
         self._entry = tk.Entry(
             self,
             textvariable=self._var,
+            width=width,
             validate="key",
             validatecommand=vcmd,
             fg=tokens.FG_1,
@@ -293,7 +320,9 @@ class NumberField(ttk.Frame):
             relief="sunken",
             bd=1,
         )
-        self._entry.pack(side="top", fill="x")
+        # Round 40 — anchor="w" replaces fill="x" so the box doesn't
+        # stretch to fill the panel.
+        self._entry.pack(side="top", anchor="w")
 
     def _validate(self, new_value: str) -> bool:
         if new_value == "" or new_value == "-":
@@ -339,8 +368,11 @@ class CurrencyField(ttk.Frame):
         parent: tk.Widget,
         label: str,
         value: str = "",
+        width: int = 14,
         **kwargs: Any,
     ) -> None:
+        # Round 40 — entry width fixed (default 14 chars: fits
+        # "9,999,999.99" with breathing room). Override via ``width=``.
         super().__init__(parent, **kwargs)
 
         self._var = tk.StringVar(value=value)
@@ -356,7 +388,7 @@ class CurrencyField(ttk.Frame):
         lbl.pack(side="top", fill="x")
 
         row = tk.Frame(self, bg=tokens.BG_MUTED)
-        row.pack(side="top", fill="x")
+        row.pack(side="top", anchor="w")
 
         prefix = tk.Label(
             row,
@@ -371,6 +403,7 @@ class CurrencyField(ttk.Frame):
         self._entry = tk.Entry(
             row,
             textvariable=self._var,
+            width=width,
             validate="key",
             validatecommand=vcmd,
             fg=tokens.FG_1,
@@ -378,7 +411,9 @@ class CurrencyField(ttk.Frame):
             relief="sunken",
             bd=1,
         )
-        self._entry.pack(side="left", fill="x", expand=True)
+        # Round 40 — no fill="x"/expand=True so the entry stays at
+        # the declared width regardless of panel width.
+        self._entry.pack(side="left")
 
     def _validate(self, new_value: str) -> bool:
         if new_value == "":
@@ -422,8 +457,11 @@ class DateField(ttk.Frame):
         parent: tk.Widget,
         label: str,
         default: str = "today",
+        width: int = 12,
         **kwargs: Any,
     ) -> None:
+        # Round 40 — entry width fixed (default 12 chars: DD/MM/YYYY = 10
+        # chars + dropdown affordance). Override via ``width=``.
         super().__init__(parent, **kwargs)
 
         today = datetime.date.today()
@@ -449,13 +487,14 @@ class DateField(ttk.Frame):
             kw: dict[str, Any] = dict(
                 date_pattern="dd/mm/yyyy",
                 font=_make_font("Segoe UI", tokens.FS_13),
+                width=width,
             )
             if init_date:
                 kw["year"] = init_date.year
                 kw["month"] = init_date.month
                 kw["day"] = init_date.day
             self._calendar_widget = DateEntry(self, **kw)
-            self._calendar_widget.pack(side="top", fill="x")
+            self._calendar_widget.pack(side="top", anchor="w")
             self._mode = "calendar"
         except ImportError:
             # Fallback: plain entry with DD/MM/YYYY validation
@@ -464,12 +503,13 @@ class DateField(ttk.Frame):
             self._entry = tk.Entry(
                 self,
                 textvariable=self._var,
+                width=width,
                 fg=tokens.FG_1,
                 font=_make_font("Segoe UI", tokens.FS_13),
                 relief="sunken",
                 bd=1,
             )
-            self._entry.pack(side="top", fill="x")
+            self._entry.pack(side="top", anchor="w")
             self._mode = "entry"
 
     def get_date(self) -> datetime.date | None:
@@ -505,8 +545,11 @@ class SecretField(ttk.Frame):
         label: str,
         pattern: str = r".+",
         remember_key: str | None = None,
+        width: int = 20,
         **kwargs: Any,
     ) -> None:
+        # Round 40 — entry width fixed (default 20 chars; HYIA SIN is
+        # 4-6 digits but secrets in general can be longer).
         super().__init__(parent, **kwargs)
 
         self._pattern = re.compile(pattern)
@@ -526,18 +569,21 @@ class SecretField(ttk.Frame):
         lbl.pack(side="top", fill="x")
 
         row = tk.Frame(self, bg=tokens.BG_MUTED)
-        row.pack(side="top", fill="x")
+        row.pack(side="top", anchor="w")
 
         self._entry = tk.Entry(
             row,
             textvariable=self._var,
+            width=width,
             show="●",
             fg=tokens.FG_1,
             font=_make_font("Segoe UI", tokens.FS_13),
             relief="sunken",
             bd=1,
         )
-        self._entry.pack(side="left", fill="x", expand=True, padx=(0, tokens.SP_2))
+        # Round 40 — drop fill="x"/expand=True so the entry stays at
+        # its declared width (the eye-toggle button is right next to it).
+        self._entry.pack(side="left", padx=(0, tokens.SP_2))
         self._entry.bind("<FocusOut>", self._on_blur)
 
         self._eye_btn = ttk.Button(row, text="Show", width=6, command=self._toggle_show)
@@ -784,7 +830,7 @@ class Table(ttk.Frame):
         parent: tk.Widget,
         columns: list[dict[str, Any]],
         min_height: int = 200,
-        row_style: Callable[[dict[str, Any]], dict[str, str]] | None = None,
+        row_style: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         on_row_click: Callable[[dict[str, Any]], None] | None = None,
         **kwargs: Any,
     ) -> None:
@@ -877,11 +923,17 @@ class Table(ttk.Frame):
 
             if style_opts:
                 tag_name = f"style_{i}"
-                self._tree.tag_configure(
-                    tag_name,
-                    background=style_opts.get("background", ""),
-                    foreground=style_opts.get("foreground", ""),
-                )
+                # Round 22 — accept an optional ``font`` key so callers can
+                # render italic / muted "comment sub-rows" inline beneath
+                # their parent data row.  Falls through to no-font when the
+                # caller doesn't supply one (default Tk Treeview font).
+                tag_kwargs: dict[str, Any] = {
+                    "background": style_opts.get("background", ""),
+                    "foreground": style_opts.get("foreground", ""),
+                }
+                if "font" in style_opts:
+                    tag_kwargs["font"] = style_opts["font"]
+                self._tree.tag_configure(tag_name, **tag_kwargs)
                 tags.append(tag_name)
             else:
                 bg = row.get("_bg")
@@ -1065,6 +1117,32 @@ class SelectableList(tk.Frame):
                 cursor="hand2",
             )
             row_frame.pack(fill="x")
+
+            # Round 22d — pack the optional data-bar FIRST so it claims
+            # the bottom 3px of the row.  Subsequent label/badge widgets
+            # then fill the remaining height.  Pack ordering matters: a
+            # widget packed later with side=bottom only gets the
+            # leftover bottom area, so the bar must come before the
+            # label/badge to be visible.  Backwards-compatible: when
+            # value_pct is None no bar is packed and the row looks
+            # identical to the pre-22d rail.
+            if item.value_pct is not None:
+                pct_clamped = max(0.0, min(100.0, item.value_pct))
+                if item.value_pct > 110:
+                    bar_color = tokens.DANGER_FG
+                elif item.value_pct > 100:
+                    bar_color = tokens.WARN_FG
+                else:
+                    bar_color = tokens.OK_FG
+                bar_track = tk.Frame(
+                    row_frame,
+                    bg=tokens.BORDER_SUBTLE,
+                    height=3,
+                )
+                bar_track.pack(side="bottom", fill="x")
+                bar_track.pack_propagate(False)
+                bar_fill = tk.Frame(bar_track, bg=bar_color)
+                bar_fill.place(x=0, y=0, relwidth=pct_clamped / 100.0, relheight=1.0)
 
             lbl = tk.Label(
                 row_frame,
@@ -1571,9 +1649,7 @@ def CommentaryDialog(  # noqa: N802
     )
     cancel_btn.pack(side="right")
 
-    # -----------------------------------------------------------------------
     # Keyboard shortcuts
-    # -----------------------------------------------------------------------
     top.bind("<Escape>", _do_cancel)
     top.bind("<Control-s>", _do_save_inplace)
 

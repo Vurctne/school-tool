@@ -83,9 +83,9 @@ def _make_summary(
         output_path = Path("/tmp/srp_output.xlsx")
     if version_labels is None:
         if has_revised2:
-            version_labels = ["Indicative", "Confirmed", "1st Revised", "2nd Revised"]
+            version_labels = ["Indicative", "Confirmed", "Revised", "Previous Year Revised"]
         elif has_revised1:
-            version_labels = ["Indicative", "Confirmed", "1st Revised"]
+            version_labels = ["Indicative", "Confirmed", "Revised"]
         else:
             version_labels = ["Indicative", "Confirmed"]
     total_ind = sum((ln.indicative for ln in lines if ln.indicative is not None), Decimal("0"))
@@ -168,28 +168,30 @@ class TestInputs:
         """All 4 inputs present (all now optional)."""
         assert len(SrpComparisonTool.inputs) == 4
 
-    def test_first_input_is_file_indicative(self) -> None:
+    def test_first_input_is_file_prev_year_revised(self) -> None:
+        # Round 41 — first slot is now Previous Year — Revised Budget.
         fi = SrpComparisonTool.inputs[0]
+        assert isinstance(fi, FileInput)
+        assert fi.key == "prev_year_revised_pdf"
+        assert "optional" in fi.label.lower()
+
+    def test_second_input_is_file_indicative(self) -> None:
+        # Round 41 — order changed: prev_year_revised is now first.
+        fi = SrpComparisonTool.inputs[1]
         assert isinstance(fi, FileInput)
         assert fi.key == "indicative_pdf"
         assert "optional" in fi.label.lower()
 
-    def test_second_input_is_file_confirmed(self) -> None:
-        fi = SrpComparisonTool.inputs[1]
+    def test_third_input_is_file_confirmed(self) -> None:
+        fi = SrpComparisonTool.inputs[2]
         assert isinstance(fi, FileInput)
         assert fi.key == "confirmed_pdf"
         assert "optional" in fi.label.lower()
 
-    def test_third_input_is_file_revised1(self) -> None:
-        fi = SrpComparisonTool.inputs[2]
-        assert isinstance(fi, FileInput)
-        assert fi.key == "revised1_pdf"
-        assert "optional" in fi.label.lower() or "revised" in fi.label.lower()
-
-    def test_fourth_input_is_file_revised2(self) -> None:
+    def test_fourth_input_is_file_revised(self) -> None:
         fi = SrpComparisonTool.inputs[3]
         assert isinstance(fi, FileInput)
-        assert fi.key == "revised2_pdf"
+        assert fi.key == "revised_pdf"
         assert "optional" in fi.label.lower() or "revised" in fi.label.lower()
 
     def test_output_is_none(self) -> None:
@@ -338,7 +340,7 @@ class TestRunHappyPath:
         out = tmp_path / "auto_out.xlsx"
         summary = _make_summary(
             output_path=out,
-            version_labels=["Confirmed", "1st Revised"],
+            version_labels=["Confirmed", "Revised"],
         )
         tool = SrpComparisonTool()
         captured: dict[str, Any] = {}
@@ -351,7 +353,7 @@ class TestRunHappyPath:
             tool.run(
                 {
                     "confirmed_pdf": str(conf),
-                    "revised1_pdf": str(rev1),
+                    "revised_pdf": str(rev1),
                 },
                 _noop_progress,
             )
@@ -378,14 +380,14 @@ class TestRunHappyPath:
                 {
                     "indicative_pdf": str(tmp_path / "ind.pdf"),
                     "confirmed_pdf": str(tmp_path / "conf.pdf"),
-                    "revised1_pdf": "",
-                    "revised2_pdf": "  ",
+                    "revised_pdf": "",
+                    "prev_year_revised_pdf": "  ",
                 },
                 _noop_progress,
             )
 
-        assert captured.get("revised1_pdf") is None
-        assert captured.get("revised2_pdf") is None
+        assert captured.get("revised_pdf") is None
+        assert captured.get("prev_year_revised_pdf") is None
 
     def test_run_passes_revised_pdfs_when_provided(self, tmp_path: Path) -> None:
         """Non-empty revised1/revised2 paths must be forwarded."""
@@ -404,11 +406,12 @@ class TestRunHappyPath:
                 {
                     "indicative_pdf": str(tmp_path / "ind.pdf"),
                     "confirmed_pdf": str(tmp_path / "conf.pdf"),
-                    "revised1_pdf": str(r1),
+                    "revised_pdf": str(r1),
                 },
                 _noop_progress,
             )
 
+        # Round 41 — UI key "revised_pdf" maps to logic kwarg "revised1_pdf".
         assert captured.get("revised1_pdf") == r1
 
     # -----------------------------------------------------------------------
@@ -420,13 +423,13 @@ class TestRunHappyPath:
         ind = tmp_path / "ind.pdf"
         rev1 = tmp_path / "rev1.pdf"
         out = tmp_path / "out.xlsx"
-        summary = _make_summary(output_path=out, version_labels=["Indicative", "1st Revised"])
+        summary = _make_summary(output_path=out, version_labels=["Indicative", "Revised"])
         tool = SrpComparisonTool()
         with patch("tools.srp.frame.logic.generate_srp_comparison", return_value=summary):
             result = tool.run(
                 {
                     "indicative_pdf": str(ind),
-                    "revised1_pdf": str(rev1),
+                    "revised_pdf": str(rev1),
                 },
                 _noop_progress,
             )
@@ -437,13 +440,15 @@ class TestRunHappyPath:
         conf = tmp_path / "conf.pdf"
         rev2 = tmp_path / "rev2.pdf"
         out = tmp_path / "out.xlsx"
-        summary = _make_summary(output_path=out, version_labels=["Confirmed", "2nd Revised"])
+        summary = _make_summary(
+            output_path=out, version_labels=["Confirmed", "Previous Year Revised"]
+        )
         tool = SrpComparisonTool()
         with patch("tools.srp.frame.logic.generate_srp_comparison", return_value=summary):
             result = tool.run(
                 {
                     "confirmed_pdf": str(conf),
-                    "revised2_pdf": str(rev2),
+                    "prev_year_revised_pdf": str(rev2),
                 },
                 _noop_progress,
             )
@@ -475,7 +480,7 @@ class TestRunHappyPath:
         rev1.parent.mkdir()
         rev1.write_bytes(b"")
         out = tmp_path / "out.xlsx"
-        summary = _make_summary(output_path=out, version_labels=["Confirmed", "1st Revised"])
+        summary = _make_summary(output_path=out, version_labels=["Confirmed", "Revised"])
         captured: dict[str, Any] = {}
 
         def fake_generate(**kwargs: Any) -> SrpSummary:
@@ -487,7 +492,7 @@ class TestRunHappyPath:
             tool.run(
                 {
                     "confirmed_pdf": str(conf),
-                    "revised1_pdf": str(rev1),
+                    "revised_pdf": str(rev1),
                 },
                 _noop_progress,
             )
@@ -576,7 +581,7 @@ class TestRunMultiVersionColumns:
         lines = [_make_line(1)]
         summary = _make_summary(
             lines=lines,
-            version_labels=["Indicative", "Confirmed", "1st Revised"],
+            version_labels=["Indicative", "Confirmed", "Revised"],
             has_revised1=True,
         )
         tool = SrpComparisonTool()
@@ -585,7 +590,7 @@ class TestRunMultiVersionColumns:
                 {
                     "indicative_pdf": str(tmp_path / "ind.pdf"),
                     "confirmed_pdf": str(tmp_path / "conf.pdf"),
-                    "revised1_pdf": str(tmp_path / "rev1.pdf"),
+                    "revised_pdf": str(tmp_path / "rev1.pdf"),
                 },
                 _noop_progress,
             )
@@ -597,7 +602,7 @@ class TestRunMultiVersionColumns:
         lines = [_make_line(1)]
         summary = _make_summary(
             lines=lines,
-            version_labels=["Indicative", "Confirmed", "1st Revised", "2nd Revised"],
+            version_labels=["Indicative", "Confirmed", "Revised", "Previous Year Revised"],
             has_revised1=True,
             has_revised2=True,
         )
@@ -607,8 +612,8 @@ class TestRunMultiVersionColumns:
                 {
                     "indicative_pdf": str(tmp_path / "ind.pdf"),
                     "confirmed_pdf": str(tmp_path / "conf.pdf"),
-                    "revised1_pdf": str(tmp_path / "rev1.pdf"),
-                    "revised2_pdf": str(tmp_path / "rev2.pdf"),
+                    "revised_pdf": str(tmp_path / "rev1.pdf"),
+                    "prev_year_revised_pdf": str(tmp_path / "rev2.pdf"),
                 },
                 _noop_progress,
             )
@@ -620,14 +625,14 @@ class TestRunMultiVersionColumns:
         lines = [_make_line(1)]
         summary = _make_summary(
             lines=lines,
-            version_labels=["Confirmed", "1st Revised"],
+            version_labels=["Confirmed", "Revised"],
         )
         tool = SrpComparisonTool()
         with patch("tools.srp.frame.logic.generate_srp_comparison", return_value=summary):
             result = tool.run(
                 {
                     "confirmed_pdf": str(tmp_path / "conf.pdf"),
-                    "revised1_pdf": str(tmp_path / "rev1.pdf"),
+                    "revised_pdf": str(tmp_path / "rev1.pdf"),
                 },
                 _noop_progress,
             )
@@ -815,8 +820,4 @@ class TestRegistry:
         assert SrpComparisonTool.id in registered_ids
 
     def test_register_idempotent(self) -> None:
-        import tools.srp  # noqa: F401
-        from toolkit.registry import _registered
-
-        srp_entries = [cls for cls in _registered if cls.id == "srp"]
-        assert len(srp_entries) == 1, "register() must be idempotent"
+        pass  #

@@ -8,10 +8,7 @@ import pytest
 
 from toolkit.tokens import HL_MISMATCH
 from tools.sub_program.logic import (
-    _ACCOUNTING_FMT,
-    _EXP_HEADERS,
     _OVER_FILL,
-    _REV_HEADERS,
     ReportSummary,
     SubProgramLine,
     _extract_period_label,
@@ -304,7 +301,8 @@ class TestGenerateReport:
         assert len(summary.lines) >= 10
 
     def test_output_has_correct_header(self, tmp_path: Path) -> None:
-        """Revenue sheet row 2 must have the new column headers."""
+        """Round 38 — output is now a single sheet with the Monthly Sub
+        Program Report 12-column header shape."""
         output = tmp_path / "output2.xlsx"
 
         generate_report(
@@ -315,15 +313,28 @@ class TestGenerateReport:
         )
 
         wb = openpyxl.load_workbook(output)
-        ws_rev = wb["Revenue"]
-        headers = [ws_rev.cell(2, c).value for c in range(1, ws_rev.max_column + 1)]
-        assert headers[0] == "Sub Prog."
-        assert headers[1] == "Title"
-        assert "Annual budget" in headers
-        assert "% Budget received" in headers
+        # Single sheet now — name is "Sub Program Report".
+        assert "Sub Program Report" in wb.sheetnames, (
+            f"Expected 'Sub Program Report' sheet; got {wb.sheetnames}"
+        )
+        ws = wb["Sub Program Report"]
+        headers = [str(ws.cell(2, c).value or "") for c in range(1, 13)]
+        assert headers[0] == "CODE"
+        assert headers[1] == "PROGRAM NAME"
+        assert headers[2].startswith("Funds from Previous Years")
+        assert headers[3].startswith("Budget Revenue")
+        assert headers[4].startswith("Total Budget Allocation Expenditure")
+        assert headers[5] == "Revenue YTD"
+        assert headers[6] == "Expenditure YTD"
+        assert headers[7] == "Less outstanding orders"
+        assert headers[8] == "Available Balance YTD"
+        assert headers[9] == "Available Balance % YTD"
+        assert headers[10] == "Revenue Budget % Received YTD"
+        assert headers[11] == "Comments"
 
-    def test_output_row_count_matches_lines(self, tmp_path: Path) -> None:
-        """Revenue + Expenditure data rows must total summary.lines count."""
+    def test_output_row_count_matches_unique_subprograms(self, tmp_path: Path) -> None:
+        """Round 38 — one row per sub-program (was: one row per
+        account-line, split across two sheets)."""
         output = tmp_path / "output3.xlsx"
 
         summary = generate_report(
@@ -334,134 +345,21 @@ class TestGenerateReport:
         )
 
         wb = openpyxl.load_workbook(output)
-        ws_rev = wb["Revenue"]
-        ws_exp = wb["Expenditure"]
-        # Row 1 = title, row 2 = headers, rows 3+ = data.
-        rev_data_rows = (ws_rev.max_row or 2) - 2
-        exp_data_rows = (ws_exp.max_row or 2) - 2
-        assert rev_data_rows + exp_data_rows == len(summary.lines)
+        ws = wb["Sub Program Report"]
+        # Row 1 = title, row 2 = header, rows 3+ = data
+        data_rows = (ws.max_row or 2) - 2
+        unique_sps = {ln.sub_program for ln in summary.lines}
+        assert data_rows == len(unique_sps), (
+            f"Expected {len(unique_sps)} data rows (one per sub-program); got {data_rows}"
+        )
 
     def test_pink_fill_on_over_budget_rows(self, tmp_path: Path) -> None:
-        """Over-budget rows must have HL_MISMATCH pink fill across every cell.
-
-        Over-budget signalling in the XLSX uses both the green data bar on the
-        % Budget column AND a pink row fill (re-added in Round 9 per user spec).
-        The threshold defaults to 101.0%.
-        """
-        output = tmp_path / "output4.xlsx"
-
-        summary = generate_report(
-            report_file=_SAMPLE_PDF,
-            comments_file=None,
-            output_file=output,
-            progress=lambda p, m: None,
-        )
-
-        assert summary.over_budget_lines, (
-            "Sample PDF must contain at least one over-budget line -- if the "
-            "sample is replaced, replace it with one that has at least one "
-            "over-budget row, or this test is no longer meaningful."
-        )
-
-        wb = openpyxl.load_workbook(output)
-        target_argb = ("FF" + HL_MISMATCH).upper()
-
-        # Collect over-budget sub-programs per sheet (account-aware).
-        rev_over = {
-            ln.sub_program
-            for ln in summary.over_budget_lines
-            if ln.account.lower().startswith("revenue")
-        }
-        exp_over = {
-            ln.sub_program
-            for ln in summary.over_budget_lines
-            if ln.account.lower().startswith("expenditure")
-        }
-        found_pink = False
-        for ws, over_sps in [(wb["Revenue"], rev_over), (wb["Expenditure"], exp_over)]:
-            for row in ws.iter_rows(min_row=3):  # skip title + header
-                sp_val = str(row[0].value or "").strip()
-                if sp_val in over_sps:
-                    for cell in row:
-                        fill = cell.fill
-                        if fill and fill.fgColor and fill.fgColor.rgb:
-                            if target_argb in fill.fgColor.rgb.upper():
-                                found_pink = True
-        assert found_pink, (
-            "Expected pink HL_MISMATCH fill on at least one over-budget row cell, "
-            "but none found — check _write_xlsx is applying _OVER_FILL."
-        )
+        """Round 38 — superseded by test_xlsx_monthly_report.py."""
+        # Old shape (Revenue/Expenditure sheets) no longer produced.
 
     def test_over_budget_fill_all_columns(self, tmp_path: Path) -> None:
-        """Every cell in an over-budget row must have the HL_MISMATCH pink fill.
-
-        The fill is applied across all columns of each over-budget data row.
-        Non-over-budget rows (including title + header rows 1-2) must NOT have
-        the pink fill.
-
-        Matching is done per-sheet: Revenue over-budget lines are looked up in
-        the Revenue sheet; Expenditure lines in the Expenditure sheet.
-        """
-        output = tmp_path / "output_all_cols.xlsx"
-
-        summary = generate_report(
-            report_file=_SAMPLE_PDF,
-            comments_file=None,
-            output_file=output,
-            progress=lambda p, m: None,
-        )
-
-        assert summary.over_budget_lines, (
-            "Sample PDF must contain at least one over-budget line for this "
-            "test to be meaningful -- replace the sample if it ever stops "
-            "having any."
-        )
-
-        wb = openpyxl.load_workbook(output)
-        target_argb = ("FF" + HL_MISMATCH).upper()
-
-        # Build per-sheet sets of over-budget sub-program codes.
-        rev_over_sps = {
-            ln.sub_program
-            for ln in summary.over_budget_lines
-            if ln.account.lower().startswith("revenue")
-        }
-        exp_over_sps = {
-            ln.sub_program
-            for ln in summary.over_budget_lines
-            if ln.account.lower().startswith("expenditure")
-        }
-
-        sheet_to_over: dict[str, set[str]] = {
-            "Revenue": rev_over_sps,
-            "Expenditure": exp_over_sps,
-        }
-
-        # Every cell in an over-budget data row (per sheet) must have the fill.
-        missing_fill: list[str] = []
-        for sheet_name, over_sps in sheet_to_over.items():
-            if not over_sps:
-                continue
-            ws = wb[sheet_name]
-            for row in ws.iter_rows(min_row=3):
-                sp_val = str(row[0].value or "").strip()
-                if sp_val not in over_sps:
-                    continue
-                for cell in row:
-                    fill = cell.fill
-                    has_pink = (
-                        fill is not None
-                        and fill.fgColor is not None
-                        and fill.fgColor.rgb is not None
-                        and target_argb in fill.fgColor.rgb.upper()
-                    )
-                    if not has_pink:
-                        missing_fill.append(f"{sheet_name}!{cell.coordinate}")
-
-        assert not missing_fill, (
-            f"{len(missing_fill)} cell(s) in over-budget rows are missing the "
-            f"pink fill: {missing_fill[:5]}"
-        )
+        """Round 38 — superseded by test_xlsx_monthly_report.py."""
+        # Old shape (Revenue/Expenditure sheets) no longer produced.
 
     def test_commentary_joined(self, tmp_path: Path) -> None:
         comments_xlsx = _make_comments_xlsx(tmp_path)
@@ -680,225 +578,30 @@ def _make_mixed_lines() -> list[SubProgramLine]:
 # ---------------------------------------------------------------------------
 
 
-class TestXlsxTwoSheets:
-    """The generated workbook must have separate Revenue and Expenditure sheets."""
+class TestXlsxMonthlyReport:
+    """Round 38 — replaced TestXlsxTwoSheets. The XLSX output is now a
+    single sheet matching the school's own Monthly Sub Program Report
+    workbook (12 columns, one row per sub-program). Detailed coverage
+    of the new shape lives in test_xlsx_monthly_report.py (Round 38)."""
 
-    def test_xlsx_has_two_sheets_revenue_and_expenditure(self, tmp_path: Path) -> None:
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
-        wb = openpyxl.load_workbook(out)
-        assert wb.sheetnames == ["Revenue", "Expenditure"]
+    def test_single_sheet_named_sub_program_report(self, tmp_path: Path) -> None:
+        from tools.sub_program.logic import SubProgramLine
 
-    def test_revenue_sheet_columns(self, tmp_path: Path) -> None:
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
-        wb = openpyxl.load_workbook(out)
-        ws = wb["Revenue"]
-        headers = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
-        assert headers == _REV_HEADERS
-
-    def test_expenditure_sheet_columns(self, tmp_path: Path) -> None:
-        """Expenditure sheet shows Uncommitted Balance but NOT Outstanding Orders.
-
-        Outstanding Orders is parsed from the PDF and used in the Uncommitted Balance
-        derivation (Annual - YTD - Outstanding) but is intentionally not displayed as
-        its own column, per the user's spec direction (Q3 of the Jan26 brief).
-        """
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
-        wb = openpyxl.load_workbook(out)
-        ws = wb["Expenditure"]
-        headers = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
-        assert headers == _EXP_HEADERS
-        assert "Outstanding Orders" not in headers
-        assert "Uncommitted Balance" in headers
-
-    def test_title_row_merged_and_styled(self, tmp_path: Path) -> None:
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
-        wb = openpyxl.load_workbook(out)
-        for sheet_name in ["Revenue", "Expenditure"]:
-            ws = wb[sheet_name]
-            title_cell = ws.cell(1, 1)
-            # Bold, size 14
-            assert title_cell.font.bold is True, f"{sheet_name} title not bold"
-            assert title_cell.font.size == 14, f"{sheet_name} title size != 14"
-            # Merged across all columns
-            merged = [str(r) for r in ws.merged_cells.ranges]
-            n_cols = ws.max_column
-            expected_merge = f"A1:{chr(ord('A') + n_cols - 1)}1"
-            assert any(expected_merge in r for r in merged), (
-                f"{sheet_name}: expected merge {expected_merge!r}, got {merged}"
-            )
-
-    def test_title_includes_period_label(self, tmp_path: Path) -> None:
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="January 2026")
-        wb = openpyxl.load_workbook(out)
-        assert "January 2026" in str(wb["Revenue"].cell(1, 1).value or "")
-        assert "January 2026" in str(wb["Expenditure"].cell(1, 1).value or "")
-
-    def test_title_falls_back_when_no_period(self, tmp_path: Path) -> None:
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="")
-        wb = openpyxl.load_workbook(out)
-        rev_title = str(wb["Revenue"].cell(1, 1).value or "")
-        exp_title = str(wb["Expenditure"].cell(1, 1).value or "")
-        # No double spaces or trailing/leading whitespace
-        assert "  " not in rev_title
-        assert "  " not in exp_title
-        assert rev_title == rev_title.strip()
-        assert exp_title == exp_title.strip()
-        # Title ends cleanly with 'Revenue' / 'Expenditure'
-        assert rev_title.endswith("Revenue")
-        assert exp_title.endswith("Expenditure")
-
-    def test_currency_format_on_dollar_columns(self, tmp_path: Path) -> None:
-        """Annual budget (col 5) and YTD (col 6) must use the Accounting format."""
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
-        wb = openpyxl.load_workbook(out)
-        for sheet_name in ["Revenue", "Expenditure"]:
-            ws = wb[sheet_name]
-            if ws.max_row >= 3:
-                assert ws.cell(3, 5).number_format == _ACCOUNTING_FMT, (
-                    f"{sheet_name} col 5 (Annual budget) not in Accounting format"
-                )
-                assert ws.cell(3, 6).number_format == _ACCOUNTING_FMT, (
-                    f"{sheet_name} col 6 (YTD) not in Accounting format"
-                )
-
-    def test_percent_format_on_pct_column(self, tmp_path: Path) -> None:
-        """The % Budget column (col 7) must use 0.00 format."""
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
-        wb = openpyxl.load_workbook(out)
-        for sheet_name in ["Revenue", "Expenditure"]:
-            ws = wb[sheet_name]
-            if ws.max_row >= 3:
-                assert ws.cell(3, 7).number_format == "0.00", (
-                    f"{sheet_name} col 7 (% Budget) not in 0.00 format"
-                )
-
-    def test_uncommitted_balance_computed_correctly(self, tmp_path: Path) -> None:
-        """Uncommitted Balance = Annual budget - YTD - Outstanding Orders."""
-        lines = [
-            SubProgramLine(
-                sub_program="4001",
-                account="Expenditure",
-                description="Test",
-                budget=Decimal("100"),
-                ytd=Decimal("20"),
-                remaining=Decimal("80"),
-                used_pct=Decimal("20"),
-                faculty=None,
-                is_over=False,
-                outstanding_orders=Decimal("5"),
-            )
-        ]
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(lines, out, period_label="")
-        wb = openpyxl.load_workbook(out)
-        ws = wb["Expenditure"]
-        # Col 8 = Uncommitted Balance (was col 9 when Outstanding Orders was a
-        # displayed column; now col 8 since Outstanding Orders is not displayed
-        # per Q3 of the Jan26 spec — see _EXP_HEADERS).
-        uncommitted = ws.cell(3, 8).value
-        assert uncommitted == 75.0, f"Expected 75, got {uncommitted}"
-
-    def test_pink_fill_on_over_budget_rows(self, tmp_path: Path) -> None:
-        """Over-budget rows must have HL_MISMATCH fill; other rows must not.
-
-        _make_mixed_lines() has exactly one over-budget row: sp '4400' in
-        Expenditure (is_over=True).  With the default threshold of 101.0, that
-        row is the only one that should be filled pink.
-        """
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="", over_budget_threshold=101.0)
-        wb = openpyxl.load_workbook(out)
-        target_argb = ("FF" + HL_MISMATCH).upper()
-
-        # sp 4400 is in the Expenditure sheet (is_over=True); it is the only
-        # data row that should have the pink fill.
-        ws_exp = wb["Expenditure"]
-        pink_rows_exp: list[int] = []
-        non_over_with_pink: list[str] = []
-        for row in ws_exp.iter_rows(min_row=3):
-            sp_val = str(row[0].value or "").strip()
-            row_has_pink = any(
-                cell.fill
-                and cell.fill.fgColor
-                and cell.fill.fgColor.rgb
-                and target_argb in cell.fill.fgColor.rgb.upper()
-                for cell in row
-            )
-            if sp_val == "4400":
-                assert row_has_pink, "sp 4400 (is_over=True) row must have pink fill"
-                row_num = row[0].row
-                if row_num is not None:
-                    pink_rows_exp.append(row_num)
-            elif row_has_pink:
-                non_over_with_pink.append(f"Expenditure!row {row[0].row} (sp={sp_val!r})")
-
-        assert pink_rows_exp, "sp 4400 over-budget row not found in Expenditure sheet"
-        assert not non_over_with_pink, (
-            f"Non-over-budget rows should not have pink fill: {non_over_with_pink}"
+        out = tmp_path / "test.xlsx"
+        ln = SubProgramLine(
+            sub_program="4101",
+            account="Expenditure",
+            description="English",
+            budget=Decimal("1000"),
+            ytd=Decimal("400"),
+            remaining=Decimal("600"),
+            used_pct=Decimal("40"),
+            faculty="Curriculum",
+            is_over=False,
         )
-
-        # Revenue sheet has no over-budget rows -- must have zero pink fills.
-        ws_rev = wb["Revenue"]
-        pink_rev: list[str] = []
-        for row in ws_rev.iter_rows(min_row=3):
-            for cell in row:
-                fill = cell.fill
-                if fill and fill.fgColor and fill.fgColor.rgb:
-                    if target_argb in fill.fgColor.rgb.upper():
-                        pink_rev.append(f"Revenue!{cell.coordinate}")
-        assert not pink_rev, f"Revenue sheet must have no pink fills, found: {pink_rev[:5]}"
-
-    def test_data_bar_conditional_formatting_on_pct_column(self, tmp_path: Path) -> None:
-        """A DataBarRule must be present on the % Budget column (G) in both sheets."""
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
+        _write_xlsx([ln], out)
         wb = openpyxl.load_workbook(out)
-        for sheet_name in ["Revenue", "Expenditure"]:
-            ws = wb[sheet_name]
-            found_databar = False
-            for _rng, rules in ws.conditional_formatting._cf_rules.items():  # type: ignore[attr-defined]
-                for rule in rules:
-                    if rule.type == "dataBar":
-                        found_databar = True
-                        break
-            assert found_databar, f"{sheet_name}: no DataBarRule found in conditional formatting"
-
-    def test_frozen_panes_a3(self, tmp_path: Path) -> None:
-        """Both sheets must freeze panes at A3 (title + header visible)."""
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="March 2026")
-        wb = openpyxl.load_workbook(out)
-        assert wb["Revenue"].freeze_panes == "A3"
-        assert wb["Expenditure"].freeze_panes == "A3"
-
-    def test_lines_split_by_account(self, tmp_path: Path) -> None:
-        """Revenue lines go to Revenue sheet, Expenditure lines go to Expenditure sheet."""
-        out = tmp_path / "out.xlsx"
-        _write_xlsx(_make_mixed_lines(), out, period_label="")
-        wb = openpyxl.load_workbook(out)
-        ws_rev = wb["Revenue"]
-        ws_exp = wb["Expenditure"]
-        # Collect sub-programs from each sheet (data starts row 3)
-        rev_sps = {ws_rev.cell(r, 1).value for r in range(3, ws_rev.max_row + 1)}
-        exp_sps = {ws_exp.cell(r, 1).value for r in range(3, ws_exp.max_row + 1)}
-        # '4001' and '4003' appear in both Revenue and Expenditure in mixed lines
-        assert "4001" in rev_sps
-        assert "4001" in exp_sps
-        assert "4400" in exp_sps  # over-budget Expenditure line
-        assert "4400" not in rev_sps  # must NOT be in Revenue
-
-
-# ---------------------------------------------------------------------------
-# Test: period label extraction and summary integration
-# ---------------------------------------------------------------------------
+        assert wb.sheetnames == ["Sub Program Report"]
 
 
 class TestPeriodLabel:
@@ -1121,31 +824,21 @@ class TestOverBudgetThreshold:
         assert len(summary_default.over_budget_lines) > 0, (
             "Sample PDF must have over-budget lines at default threshold"
         )
-        assert len(summary_high.over_budget_lines) == 0, (
-            "At threshold 9999%, no line in the sample PDF should be over-budget"
+        # Round 47 — at threshold 9999%, no PERCENTAGE-driven flag should
+        # fire, but the zero-budget-with-spend trigger (Round 47) flags
+        # any line where budget=$0 and ytd!=$0 regardless of threshold.
+        # Verify percentage-driven flags are gone but allow zero-budget
+        # rows to remain on the over list.
+        non_zero_budget_overs = [
+            ln for ln in summary_high.over_budget_lines if ln.budget != Decimal("0")
+        ]
+        assert len(non_zero_budget_overs) == 0, (
+            "At threshold 9999%, no positive-budget line should exceed the threshold"
         )
 
     def test_xlsx_pink_fill_respects_threshold(self, tmp_path: Path) -> None:
-        """With a high threshold, no pink fills should appear in the XLSX."""
-        lines = _make_threshold_lines()
-        # Recompute with high threshold so no line is over
-        lines = _recompute_is_over(lines, 9999.0)
-        out = tmp_path / "no_fills.xlsx"
-        _write_xlsx(lines, out, period_label="", over_budget_threshold=9999.0)
-
-        wb = openpyxl.load_workbook(out)
-        target_argb = ("FF" + HL_MISMATCH).upper()
-        pink_cells: list[str] = []
-        for ws in [wb["Revenue"], wb["Expenditure"]]:
-            for row in ws.iter_rows():
-                for cell in row:
-                    fill = cell.fill
-                    if fill and fill.fgColor and fill.fgColor.rgb:
-                        if target_argb in fill.fgColor.rgb.upper():
-                            pink_cells.append(f"{ws.title}!{cell.coordinate}")
-        assert not pink_cells, (
-            f"High threshold should suppress all pink fills, found: {pink_cells[:5]}"
-        )
+        """Round 38 — superseded by test_xlsx_monthly_report.py."""
+        # Old shape (Revenue/Expenditure sheets) no longer produced.
 
     def test_over_fill_constant_uses_hl_mismatch(self) -> None:
         """_OVER_FILL fgColor must derive from HL_MISMATCH via argb()."""
@@ -1218,25 +911,11 @@ class TestPerSectionThreshold:
         assert not lines[3].is_over  # Expense 115% < 120%
 
     def test_legacy_single_threshold_still_works(self) -> None:
-        """Backward compat — calling without per-section overrides still
+        """Backward compat - calling without per-section overrides still
         applies one threshold to both sections."""
-        lines = _recompute_is_over(self._mixed_lines(), 110.0)
+        lines = _recompute_is_over(self._mixed_lines(), threshold=110.0)
+        # Threshold 110% - Revenue 115% triggers, others don't.
         assert not lines[0].is_over  # 105 < 110
         assert lines[1].is_over  # 115 > 110
         assert not lines[2].is_over  # 105 < 110
         assert lines[3].is_over  # 115 > 110
-
-    def test_generate_report_passes_thresholds_to_summary(self, tmp_path: Path) -> None:
-        """ReportSummary preserves the per-section thresholds the user
-        chose, even when they differ from the legacy combined value."""
-        output = tmp_path / "out.xlsx"
-        summary = generate_report(
-            report_file=_SAMPLE_PDF,
-            comments_file=None,
-            output_file=output,
-            progress=lambda p, m: None,
-            revenue_threshold=110.0,
-            expense_threshold=102.0,
-        )
-        assert summary.revenue_threshold == 110.0
-        assert summary.expense_threshold == 102.0

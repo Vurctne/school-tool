@@ -133,7 +133,37 @@ class TestGenericFallback:
         # friendly result and include support contact info.
         result = friendly_error(ZeroDivisionError("division by zero"))
         assert "unexpected" in result.banner.lower()
-        assert "vurctne@gmail.com" in result.advice.lower()
+        assert "feedback@schooltool.com.au" in result.advice.lower()
+
+
+class TestMissingInput:
+    """Round 37 — ``KeyError`` from missing input fields surfaces as a
+    'fill in X first' message, not the support fallback."""
+
+    def test_known_key_uses_friendly_label(self) -> None:
+        result = friendly_error(KeyError("report_file"))
+        # Banner should mention the human-readable label, not the raw key.
+        assert "Sub-Program report" in result.banner
+        assert "report_file" not in result.banner
+        # Advice tells the user what to do, not to email support.
+        assert "feedback@schooltool.com.au" not in result.advice.lower()
+        # Technical line preserves the original error for debugging.
+        assert "KeyError" in result.technical
+        assert "report_file" in result.technical
+
+    def test_unknown_key_falls_back_to_key_name(self) -> None:
+        # An input key we haven't seen yet still produces a helpful
+        # message — just uses the key name as the label.
+        result = friendly_error(KeyError("brand_new_input"))
+        assert "brand_new_input" in result.banner
+
+    def test_master_budget_compass_key(self) -> None:
+        result = friendly_error(KeyError("expense_file"))
+        assert "Compass Expense file" in result.banner
+
+    def test_master_budget_b_key(self) -> None:
+        result = friendly_error(KeyError("master_file_b"))
+        assert "Master Budget B" in result.banner
 
 
 # ---------------------------------------------------------------------------

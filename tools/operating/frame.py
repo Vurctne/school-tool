@@ -76,13 +76,11 @@ IMPORTANT NOTES
     included in the output.
   * Accounts present in only one period are included with the absent period
     shown as zero.
-  * This is a paid tool. Activating this tool for your school requires a
-    paid licence - see User -> Service in the app.
 
 
 SUPPORT
 
-  This tool - feedback and questions:   Vurctne@gmail.com
+  This tool - feedback and questions:   feedback@schooltool.com.au
 """
 
 # ---------------------------------------------------------------------------

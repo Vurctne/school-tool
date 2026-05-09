@@ -88,9 +88,12 @@ class TestStructure:
         assert isinstance(tool.help_text, str)
         assert len(tool.help_text.strip()) > 0
 
-    def test_inputs_declares_two_file_inputs(self) -> None:
+    def test_inputs_declares_three_file_inputs(self) -> None:
+        # Round 27 — third FileInput ``master_file_b`` enables Compare mode.
+        # Keep all three as FileInput; the run() method dispatches by which
+        # combination is filled.
         tool = MasterBudgetTool()
-        assert len(tool.inputs) == 2
+        assert len(tool.inputs) == 3
         for inp in tool.inputs:
             assert isinstance(inp, FileInput)
 
@@ -99,6 +102,7 @@ class TestStructure:
         keys = [inp.key for inp in tool.inputs]
         assert "expense_file" in keys
         assert "master_file" in keys
+        assert "master_file_b" in keys
 
     def test_output_is_auto_computed(self) -> None:
         """Output path is derived from the master_file input inside ``run()`` —
@@ -115,13 +119,26 @@ class TestStructure:
 
 class TestSecondaryActions:
     def test_returns_open_output_folder_action(self) -> None:
-        """Single secondary action: Open output folder, which reveals the
-        most recently generated workbook in Explorer/Finder/xdg-open."""
+        """Round 27 — secondary actions: 'Open output folder' (Autofill mode
+        result) + 'Export comparison Excel' (Compare mode result).
+        """
         tool = MasterBudgetTool()
         actions = tool.secondary_actions()
-        assert len(actions) == 1
-        label, cb = actions[0]
-        assert label == "Open output folder"
+        assert len(actions) == 2
+        labels = [label for label, _ in actions]
+        assert labels[0] == "Open output folder"
+        assert labels[1] == "Export comparison Excel"
+        for _, cb in actions:
+            assert callable(cb)
+
+    def test_alt_run_buttons_exposes_compare(self) -> None:
+        """Round 28 — Compare lives on its own primary-style button via
+        alt_run_buttons(), independent of the Generate primary."""
+        tool = MasterBudgetTool()
+        alt = tool.alt_run_buttons()
+        assert len(alt) == 1
+        label, cb = alt[0]
+        assert label == "Compare two budgets"
         assert callable(cb)
 
     def test_open_output_folder_handles_no_prior_run(self) -> None:
@@ -131,6 +148,32 @@ class TestSecondaryActions:
         _, cb = tool.secondary_actions()[0]
         tool._last_output_path = None
         cb()  # must not raise
+
+    def test_export_compare_handles_no_prior_compare(self) -> None:
+        """Clicking 'Export comparison Excel' before any Compare run must not
+        raise — it shows an info dialog (or silently no-ops in headless)."""
+        tool = MasterBudgetTool()
+        _, cb = tool.secondary_actions()[1]
+        tool._last_compare_summary = None
+        cb()  # must not raise
+
+    def test_run_compare_missing_master_a_returns_friendly_error(self) -> None:
+        """Round 39 — Round 28's run_compare entry-point was untested.
+        With Master Budget A blank, return a friendly error result."""
+        tool = MasterBudgetTool()
+        result = tool.run_compare({"master_file_b": "/tmp/b.xlsm"}, lambda *_: None)
+        assert result.status == "error"
+        assert result.banner_level == "danger"
+        # Friendly error mentions both files (the helpful "fill in" guidance).
+        text_blob = (result.banner_text + " ".join(ll.text for ll in result.log_lines)).lower()
+        assert "master budget" in text_blob
+
+    def test_run_compare_missing_master_b_returns_friendly_error(self) -> None:
+        """Same — Master Budget B blank."""
+        tool = MasterBudgetTool()
+        result = tool.run_compare({"master_file": "/tmp/a.xlsm"}, lambda *_: None)
+        assert result.status == "error"
+        assert result.banner_level == "danger"
 
 
 # ---------------------------------------------------------------------------
@@ -353,23 +396,13 @@ def test_open_output_folder_secondary_action_name() -> None:
 
 
 def test_open_output_folder_delegates_to_shared_helper() -> None:
-    """Master Budget's _open_output_folder must delegate to toolkit.files.open_output_folder.
-
-    The Win32 string-form regression (OneDrive paths with spaces) is now covered
-    by tests/test_files.py::test_open_output_folder_uses_string_form_on_win32.
-    This test just confirms the wiring — MB calls the helper with its stored path.
-    """
+    """Master Budget's _open_output_folder must delegate to toolkit.files.open_output_folder."""
     tool = MasterBudgetTool()
     p = Path(r"C:\Users\foo\OneDrive - DET Schools\file.xlsm")
     tool._last_output_path = p
-
     called_with: list[Path] = []
-
     with patch(
         "toolkit.files.open_output_folder", side_effect=lambda path: called_with.append(path)
     ):
         tool._open_output_folder()
-
-    assert called_with == [p], (
-        f"Expected toolkit.files.open_output_folder to be called with {p!r}; got {called_with!r}"
-    )
+    assert called_with == [p]

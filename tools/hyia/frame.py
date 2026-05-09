@@ -57,10 +57,10 @@ don't have to retype it next time.
 By default the calculation breakdown is hidden so anyone glancing at your \
 screen can't see how the code was assembled.
   • To verify the calculation, press and HOLD the "Show formula" button \
-under the result. While you hold the left mouse button down, the formula \
-appears next to the button. Release (or move the cursor off the button) \
-and the formula disappears immediately. Your SIN is masked (shown as \
-asterisks) in the formula.
+in the action row above the result. While you hold the left mouse \
+button down, the formula appears next to the button. Release (or move \
+the cursor off the button) and the formula disappears immediately. \
+Your SIN is masked (shown as asterisks) in the formula.
 
 
 IMPORTANT SECURITY NOTES
@@ -76,7 +76,7 @@ SUPPORT
 
   Westpac HYIA queries:       wibce@westpac.com.au
   DoE schools finance help:   schools.finance.support@education.vic.gov.au
-  This tool — feedback:         Vurctne@gmail.com
+  This tool — feedback:         feedback@schooltool.com.au
 
 Source: Department of Education — High Yield Investment Account (HYIA) \
 Funds Transfer, updated May 2022.
@@ -101,6 +101,8 @@ class HyiaTool:
             label="School Identification Number (SIN)",
             pattern=r"\d{4,6}",
             remember_key="hyia_sin",
+            # Round 40 — SIN is always 4-6 digits, so 8 chars is plenty.
+            width=8,
         ),
         CurrencyInput(key="amount", label="Transfer amount"),
         DateInput(key="date", label="Date of request", default="today"),
@@ -133,7 +135,7 @@ class HyiaTool:
             metrics=[("Security code", str(bd.code), "ok")],
             log_lines=[
                 LogLine(
-                    "Calculation hidden. Press and HOLD 'Show formula' below "
+                    "Calculation hidden. Press and HOLD 'Show formula' above "
                     "to reveal it for verification.",
                     tag="muted",
                 ),
@@ -162,4 +164,4 @@ class HyiaTool:
         return None
 
     def secondary_actions(self) -> list[tuple[str, Callable[..., None]]]:
-        return []  # Copy is handled shell-side because ToolResult is what it has
+        return []

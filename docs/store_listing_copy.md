@@ -1,4 +1,4 @@
-# Microsoft Store listing copy — School Tool v2.0.0
+# Microsoft Store listing copy — School Tool
 
 Source-of-truth for all the text fields you'll paste into Partner Center → Store listing. Edit
 anything you want; this is a draft. The character/word limits in each heading are Microsoft's
@@ -85,7 +85,7 @@ ROADMAP
 
 SUPPORT
 
-  Email Vurctne@gmail.com — feedback, bug reports, and feature requests welcome.
+  Email feedback@schooltool.com.au — feedback, bug reports, and feature requests welcome.
 
 REQUIREMENTS
 
@@ -212,7 +212,7 @@ USK 0, etc.). Free tier with no in-app purchases makes this trivial.
 | Field | Value | Status |
 |---|---|---|
 | **Privacy policy URL** | `https://vurctne.github.io/school-tool/privacy` | Need to host the privacy policy file (next section) on GitHub Pages OR `schooltool.com.au` once registered. Until then, can use the GitHub repo's raw markdown URL as a placeholder, or just any temporary public URL. |
-| **Support contact info** | `Vurctne@gmail.com` | Already canonical in `app_metadata.SUPPORT_EMAIL` |
+| **Support contact info** | `feedback@schooltool.com.au` | Already canonical in `app_metadata.SUPPORT_EMAIL` |
 | **Website (optional)** | (blank, or `https://schooltool.com.au` once live) | Optional |
 
 Microsoft requires a working privacy policy URL even if the app collects nothing — it's a hard
@@ -231,9 +231,8 @@ gate. The HTML/markdown that page hosts is below in `docs/store_privacy_policy.m
 
 ## Pricing
 
-- **Free** (Round 15 launch)
-- **No in-app purchases** (paid tier resumes when you flip `requires_feature` back on the
-  paid tools and re-add the User tab — that's a separate Store update later)
+- **Free**
+- **No in-app purchases**
 
 ---
 

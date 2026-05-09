@@ -45,9 +45,9 @@ IMPORTANT NOTES
 
 SUPPORT
 
-  This tool — feedback and questions:   Vurctne@gmail.com
+  This tool — feedback and questions:   feedback@schooltool.com.au
 
-Please send feedback to Vurctne@gmail.com
+Please send feedback to feedback@schooltool.com.au
 """
 
 
@@ -72,6 +72,12 @@ class RefinedPalSearchTool:
     # the PAL URL in the user's default browser via webbrowser.open().
     inputs: list[Any] = []
     output = None
+    # Round 29 — launcher tools have nothing for the user to clear (no input
+    # fields, no banner / log carry-over between runs that the shell's
+    # Clear button would meaningfully reset). Hide the Clear button to
+    # keep the action row tight: just the big "Open Refined PAL Search"
+    # primary button.
+    show_clear_button = False
 
     def run(self, paths: dict[str, Any], progress: ProgressFn) -> ToolResult:
         """Open PAL_URL in the default browser; report success or failure."""
@@ -149,4 +155,3 @@ class RefinedPalSearchTool:
 
     def preview_update(self, key: str, value: float | str) -> ToolResult | None:
         """No live-preview inputs on this tool."""
-        return None

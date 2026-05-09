@@ -269,12 +269,18 @@ def _extract_section_header(above_text: str) -> str:
 # Canonical slot keys in order
 _SLOT_KEYS = ("indicative", "confirmed", "revised1", "revised2")
 
-# Map slot key -> default label when that slot is used
+# Map slot key -> default label when that slot is used.
+# Round 41 — labels changed from "1st Revised"/"2nd Revised" to
+# "Revised"/"Previous Year Revised" to match how Vic schools name
+# the budget versions (Previous Year settled + Indicative → Confirmed
+# → Revised progression of current year).  The internal slot keys
+# (revised1, revised2) and the SrpLine dataclass field names are
+# kept unchanged for backward compat with existing call sites.
 _SLOT_LABELS: dict[str, str] = {
     "indicative": "Indicative",
     "confirmed": "Confirmed",
-    "revised1": "1st Revised",
-    "revised2": "2nd Revised",
+    "revised1": "Revised",
+    "revised2": "Previous Year Revised",
 }
 
 
@@ -580,7 +586,13 @@ def generate_srp_comparison(
     """Parse two to four SRP PDFs, diff them, write an XLSX, and return SrpSummary.
 
     All four inputs are optional kwargs; at least two must be provided.
-    Any combination of two or more versions is accepted.
+    Round 41 — the slot kwargs (indicative_pdf, confirmed_pdf,
+    revised1_pdf, revised2_pdf) are kept for backward compatibility.
+    The user-facing labels ("Indicative", "Confirmed", "Revised",
+    "Previous Year Revised") come from ``_SLOT_LABELS`` and reflect
+    how schools actually name the budget versions.  Frame-side
+    mapping in ``tools/srp/frame.py`` routes the user's new
+    "prev_year_revised_pdf" key into the ``revised2_pdf`` slot, etc.
     """
     provided_pairs: list[tuple[str, Path]] = [
         (slot, p)
@@ -645,11 +657,14 @@ def generate_srp_comparison(
         lines=lines,
         total_first=total_first,
         total_last=total_last,
+        # Legacy backward-compat aliases; many callers (including the
+        # frame and existing tests) still read total_indicative /
+        # total_confirmed.  Mirror first/last so old code keeps working.
         total_indicative=total_first,
         total_confirmed=total_last,
         counts=counts,
         output_path=output_file,
         version_labels=version_labels,
-        has_revised1="revised1" in slot_keys,
-        has_revised2="revised2" in slot_keys,
+        has_revised1="Revised" in version_labels,
+        has_revised2="Previous Year Revised" in version_labels,
     )

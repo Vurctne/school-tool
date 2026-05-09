@@ -55,6 +55,23 @@ _hidden += [
     "pythoncom",
 ]
 
+# Round 30 — winrt (Microsoft Store update check). The winrt packages are
+# namespace packages with dynamic submodule resolution; PyInstaller
+# can't auto-discover them, so we declare them explicitly. Each
+# winrt.<dotted.namespace> we actually call needs to be in this list
+# or the import will fail at runtime in the frozen build.
+_hidden += [
+    "winrt",
+    "winrt.windows",
+    "winrt.windows.foundation",
+    "winrt.windows.foundation.collections",
+    "winrt.windows.services",
+    "winrt.windows.services.store",
+    # Runtime support module — provides the IAsyncOperation ↔ Python
+    # awaitable bridge our update check relies on.
+    "winrt._winrt",
+]
+
 # ---------------------------------------------------------------------------
 # Collected submodules / data
 # ---------------------------------------------------------------------------
@@ -75,6 +92,14 @@ _datas = [
     (os.path.join(_root, "resources"), "resources"),
     # Vurctne publisher tiles — bundled for the in-app About panel
     (os.path.join(_root, "assets", "brand"), os.path.join("assets", "brand")),
+    # Privacy policy + changelog — both rendered inline in the rail's
+    # "Privacy Policy" / "What's new" entries via toolkit.shell. Ship the
+    # whole docs/ folder to the install root so future doc additions
+    # don't need a spec edit.
+    (os.path.join(_root, "docs"), "docs"),
+    # CHANGELOG at the install root (toolkit.shell._show_changelog reads
+    # ``<install_root>/CHANGELOG.md``).
+    (os.path.join(_root, "CHANGELOG.md"), "."),
 ]
 _datas += _extra_datas
 

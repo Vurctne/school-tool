@@ -91,6 +91,65 @@ class ImportSummary:
 
 
 # ---------------------------------------------------------------------------
+# Compare-mode (Round 27) — diff two Master Budget XLSM files at sub-program
+# level for three target metrics: Total Estimated Revenue / Total Proposed
+# Expenditure Current Year / Total Estimated Funds Held future years.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CompareRow:
+    """One sub-program's diff between two Master Budget files.
+
+    ``only_in`` is ``"A"`` when the sub-program exists only in file A,
+    ``"B"`` when only in file B, and ``None`` when present in both.
+    """
+
+    sub_program: str
+    description: str
+    a_revenue: float | None
+    b_revenue: float | None
+    a_expenditure: float | None
+    b_expenditure: float | None
+    a_funds_held: float | None
+    b_funds_held: float | None
+    only_in: str | None  # 'A' | 'B' | None
+
+
+@dataclass(frozen=True)
+class CompareSummary:
+    """Result of comparing two Master Budget XLSM files.
+
+    ``rows`` contains only sub-programs that differ — rows whose three
+    metrics are identical across the two files are filtered out (per
+    Round 27 user spec: "show only the differences").
+
+    ``label_match_a`` / ``label_match_b`` map each metric key
+    (``revenue`` / ``expenditure`` / ``funds_held``) to a tuple of
+    ``(matched_label, match_kind)`` where ``match_kind`` is one of
+    ``"exact"`` / ``"substring"`` / ``"fuzzy"`` / ``"missing"``.
+    """
+
+    rows: list[CompareRow]
+    only_in_a: list[str]
+    only_in_b: list[str]
+    file_a_path: Path
+    file_b_path: Path
+    output_path: Path | None  # populated by ``write_compare_xlsx`` only
+    label_match_a: dict[str, tuple[str, str]]
+    label_match_b: dict[str, tuple[str, str]]
+
+
+# Three target row labels we look up on the Master sheet, keyed by short
+# slug used internally + in the result table column names.
+_COMPARE_TARGET_LABELS: dict[str, str] = {
+    "revenue": "Total Estimated Revenue",
+    "expenditure": "Total Proposed Expenditure Current Year",
+    "funds_held": "Total Estimated Funds Held future years",
+}
+
+
+# ---------------------------------------------------------------------------
 # Internal exceptions
 # ---------------------------------------------------------------------------
 
@@ -1514,3 +1573,399 @@ def _parse_source_number(value: Any) -> Any:
         return int(number) if number.is_integer() else number
     except ValueError:
         return text
+
+
+# ---------------------------------------------------------------------------
+# Compare mode — public API (Round 27)
+# ---------------------------------------------------------------------------
+
+
+def suggest_compare_output_name(file_a: Path) -> str:
+    """Suggested filename for the compare XLSX output.
+
+    Format: ``MasterBudget_Compare_<YYYYMMDD_HHMM>.xlsx`` written next to
+    ``file_a``. The user can change it in the Save dialog.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    suggested = file_a.with_name(f"MasterBudget_Compare_{timestamp}.xlsx")
+    return str(suggested)
+
+
+def compare_master_budgets(
+    file_a: Path,
+    file_b: Path,
+    progress: ProgressFn,
+) -> CompareSummary:
+    """Compare two Master Budget XLSM files at sub-program level.
+
+    For each sub-program code present in either file, reads three target
+    rows from the Master sheet (``Total Estimated Revenue``,
+    ``Total Proposed Expenditure Current Year``,
+    ``Total Estimated Funds Held future years``) and returns a
+    ``CompareSummary`` containing only the sub-programs whose values
+    differ between the two files.
+
+    Sub-programs present in only one of the two files are always included
+    (with ``only_in`` set), since their existence is itself a difference.
+
+    Raises ``_BudgetError`` for missing files, wrong extensions, or
+    sheet/structure problems.
+    """
+    if not file_a.exists():
+        raise _BudgetError(f"Master Budget A not found: {file_a}")
+    if not file_b.exists():
+        raise _BudgetError(f"Master Budget B not found: {file_b}")
+    if file_a.suffix.lower() not in SUPPORTED_TARGET_EXTENSIONS:
+        raise _BudgetError("Master Budget A must use the .xlsx or .xlsm extension.")
+    if file_b.suffix.lower() not in SUPPORTED_TARGET_EXTENSIONS:
+        raise _BudgetError("Master Budget B must use the .xlsx or .xlsm extension.")
+    if file_a.resolve() == file_b.resolve():
+        raise _BudgetError("Master Budget A and B must be two different files.")
+
+    progress(5, "Validating files...")
+    progress(15, f"Reading {file_a.name}...")
+    data_a = _extract_compare_data(file_a)
+    progress(50, f"Reading {file_b.name}...")
+    data_b = _extract_compare_data(file_b)
+    progress(75, "Computing differences...")
+
+    sp_a = data_a["sub_programs"]
+    sp_b = data_b["sub_programs"]
+    common = sp_a & sp_b
+    only_in_a = sorted(sp_a - sp_b, key=_sort_key)
+    only_in_b = sorted(sp_b - sp_a, key=_sort_key)
+
+    def _name(sp: str) -> str:
+        # Prefer A's name; fall back to B's. Both stored in respective files.
+        a_name = str(data_a["names"].get(sp, ""))
+        if a_name:
+            return a_name
+        return str(data_b["names"].get(sp, ""))
+
+    rows: list[CompareRow] = []
+
+    # Common sub-programs: include only when at least one of the three
+    # values differs between A and B (per user spec "show only the
+    # differences").
+    for sp in sorted(common, key=_sort_key):
+        entry_a = data_a["data"][sp]
+        entry_b = data_b["data"][sp]
+        if (
+            entry_a["revenue"] == entry_b["revenue"]
+            and entry_a["expenditure"] == entry_b["expenditure"]
+            and entry_a["funds_held"] == entry_b["funds_held"]
+        ):
+            continue
+        rows.append(
+            CompareRow(
+                sub_program=sp,
+                description=_name(sp),
+                a_revenue=entry_a["revenue"],
+                b_revenue=entry_b["revenue"],
+                a_expenditure=entry_a["expenditure"],
+                b_expenditure=entry_b["expenditure"],
+                a_funds_held=entry_a["funds_held"],
+                b_funds_held=entry_b["funds_held"],
+                only_in=None,
+            )
+        )
+
+    # Sub-programs only in A — record A's values, leave B as None.
+    for sp in only_in_a:
+        entry_a = data_a["data"][sp]
+        rows.append(
+            CompareRow(
+                sub_program=sp,
+                description=_name(sp),
+                a_revenue=entry_a["revenue"],
+                b_revenue=None,
+                a_expenditure=entry_a["expenditure"],
+                b_expenditure=None,
+                a_funds_held=entry_a["funds_held"],
+                b_funds_held=None,
+                only_in="A",
+            )
+        )
+
+    # Sub-programs only in B.
+    for sp in only_in_b:
+        entry_b = data_b["data"][sp]
+        rows.append(
+            CompareRow(
+                sub_program=sp,
+                description=_name(sp),
+                a_revenue=None,
+                b_revenue=entry_b["revenue"],
+                a_expenditure=None,
+                b_expenditure=entry_b["expenditure"],
+                a_funds_held=None,
+                b_funds_held=entry_b["funds_held"],
+                only_in="B",
+            )
+        )
+
+    progress(100, "Completed.")
+
+    def _label_kind(match: tuple[int, str, str] | None) -> tuple[str, str]:
+        if match is None:
+            return ("", "missing")
+        return (match[1], match[2])
+
+    return CompareSummary(
+        rows=rows,
+        only_in_a=only_in_a,
+        only_in_b=only_in_b,
+        file_a_path=file_a,
+        file_b_path=file_b,
+        output_path=None,
+        label_match_a={k: _label_kind(v) for k, v in data_a["label_match"].items()},
+        label_match_b={k: _label_kind(v) for k, v in data_b["label_match"].items()},
+    )
+
+
+def write_compare_xlsx(summary: CompareSummary, output_path: Path) -> CompareSummary:
+    """Write *summary* to an XLSX comparison report at *output_path*.
+
+    Returns a fresh ``CompareSummary`` with ``output_path`` populated.
+
+    Layout
+    ------
+    Row 1 (merged A1:K1) — Title.
+    Row 2 — Header row.
+    Row 3+ — One row per ``CompareRow``. Δ cells get ``HL_MISMATCH`` pink
+    fill when the value differs between A and B (or only_in is set).
+    Numeric cells use the canonical accounting format. ``A3`` is frozen
+    so the header stays visible while scrolling.
+    """
+    if output_path.suffix.lower() != ".xlsx":
+        raise _BudgetError("Compare output must use the .xlsx extension.")
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    assert ws is not None
+    ws.title = "Compare"
+
+    headers = [
+        "Sub-program",
+        "Description",
+        "Revenue A",
+        "Revenue B",
+        "Δ Revenue (B − A)",
+        "Expense A",
+        "Expense B",
+        "Δ Expense (B − A)",
+        "Funds A",
+        "Funds B",
+        "Δ Funds (B − A)",
+    ]
+
+    title = f"Master Budget Compare — {summary.file_a_path.name} vs {summary.file_b_path.name}"
+    ws.cell(1, 1).value = title
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+
+    for col, label in enumerate(headers, start=1):
+        ws.cell(2, col).value = label
+
+    accounting_fmt = '_-"$"* #,##0.00_-;-"$"* #,##0.00_-;_-"$"* "-"??_-;_-@_-'
+    pink = PatternFill(fill_type="solid", fgColor=argb(HL_MISMATCH))
+
+    def _delta(a: float | None, b: float | None) -> float | None:
+        if a is None or b is None:
+            return None
+        return b - a
+
+    for r, row in enumerate(summary.rows, start=3):
+        ws.cell(r, 1).value = row.sub_program
+        ws.cell(r, 2).value = row.description
+        ws.cell(r, 3).value = row.a_revenue
+        ws.cell(r, 4).value = row.b_revenue
+        delta_rev = _delta(row.a_revenue, row.b_revenue)
+        ws.cell(r, 5).value = delta_rev
+        ws.cell(r, 6).value = row.a_expenditure
+        ws.cell(r, 7).value = row.b_expenditure
+        delta_exp = _delta(row.a_expenditure, row.b_expenditure)
+        ws.cell(r, 8).value = delta_exp
+        ws.cell(r, 9).value = row.a_funds_held
+        ws.cell(r, 10).value = row.b_funds_held
+        delta_fnd = _delta(row.a_funds_held, row.b_funds_held)
+        ws.cell(r, 11).value = delta_fnd
+
+        # Apply accounting format to numeric cells (3..11).
+        for col in range(3, 12):
+            ws.cell(r, col).number_format = accounting_fmt
+
+        # Pink fill on each delta cell whose value is non-zero, plus the
+        # whole row if only_in is set (sub-program present in only one file).
+        if row.only_in is not None:
+            for col in (5, 8, 11):
+                ws.cell(r, col).fill = pink
+        else:
+            if delta_rev is not None and delta_rev != 0:
+                ws.cell(r, 5).fill = pink
+            if delta_exp is not None and delta_exp != 0:
+                ws.cell(r, 8).fill = pink
+            if delta_fnd is not None and delta_fnd != 0:
+                ws.cell(r, 11).fill = pink
+
+    widths = [12, 28, 14, 14, 18, 14, 14, 18, 14, 14, 18]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A3"
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+    return CompareSummary(
+        rows=summary.rows,
+        only_in_a=summary.only_in_a,
+        only_in_b=summary.only_in_b,
+        file_a_path=summary.file_a_path,
+        file_b_path=summary.file_b_path,
+        output_path=output_path,
+        label_match_a=summary.label_match_a,
+        label_match_b=summary.label_match_b,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Compare mode — internal helpers (Round 27)
+# ---------------------------------------------------------------------------
+
+
+def _extract_compare_data(path: Path) -> dict[str, Any]:
+    """Read sub-program codes + the three target metric rows from the
+    Master sheet of *path*.
+
+    Returns a dict with:
+
+    * ``data``   — ``{sp_code: {revenue, expenditure, funds_held}}``
+      (each value is ``float | None``; None means cell empty / non-numeric).
+    * ``names``  — ``{sp_code: human-readable name}`` from row 5.
+    * ``sub_programs`` — set of sp_codes (excludes Total / EI/SP sentinels).
+    * ``label_match`` — ``{key: (row_idx, matched_label, match_kind) | None}``;
+      see ``_locate_compare_target_rows`` for match kinds.
+    """
+    wb = openpyxl.load_workbook(path, data_only=True, keep_vba=False)
+    try:
+        if _MASTER_SHEET not in wb.sheetnames:
+            raise _BudgetError(
+                f"Sheet '{_MASTER_SHEET}' was not found in {path.name}. "
+                "Compare requires the Master Budget XLSM template structure."
+            )
+        ws = wb[_MASTER_SHEET]
+
+        sp_map: dict[str, int] = {}
+        sp_names: dict[str, str] = {}
+        for col in range(4, ws.max_column + 1):
+            code = _clean_string(ws.cell(4, col).value)
+            if code and code not in {"Total", "EI/SP"}:
+                if code in sp_map:
+                    continue
+                sp_map[code] = col
+                sp_names[code] = _clean_string(ws.cell(5, col).value)
+
+        if not sp_map:
+            raise _BudgetError(f"Could not detect any sub-program codes in row 4 of {path.name}.")
+
+        target_rows = _locate_compare_target_rows(ws)
+
+        # Build per-sub-program metric dict.
+        data: dict[str, dict[str, float | None]] = {}
+        for sp_code, col in sp_map.items():
+            entry: dict[str, float | None] = {}
+            for key, match in target_rows.items():
+                if match is None:
+                    entry[key] = None
+                    continue
+                row_idx, _, _ = match
+                raw = _parse_source_number(ws.cell(row_idx, col).value)
+                if isinstance(raw, (int, float)):
+                    entry[key] = float(raw)
+                else:
+                    entry[key] = None
+            data[sp_code] = entry
+
+        return {
+            "data": data,
+            "names": sp_names,
+            "sub_programs": set(sp_map.keys()),
+            "label_match": target_rows,
+        }
+    finally:
+        wb.close()
+
+
+def _locate_compare_target_rows(
+    ws: Any,
+) -> dict[str, tuple[int, str, str] | None]:
+    """Find the three target metric rows by scanning column B labels.
+
+    Match tiers (per user spec "find the more relevant one when no exact
+    match"):
+
+    1. Exact (case-insensitive) match against the canonical target.
+    2. Substring — every word of the canonical target appears as a
+       whole token in the candidate label.
+    3. Fuzzy — Jaccard token overlap >= 0.5.
+
+    Returns ``{key: (row_idx, matched_label, match_kind) | None}``.
+    ``match_kind`` is one of ``"exact"`` / ``"substring"`` / ``"fuzzy"``.
+    Missing matches map to ``None``.
+    """
+    # Collect all non-empty column B labels with their row numbers.
+    candidates: list[tuple[int, str]] = []
+    for row in range(1, ws.max_row + 1):
+        label = _clean_string(ws.cell(row, 2).value)
+        if label:
+            candidates.append((row, label))
+
+    out: dict[str, tuple[int, str, str] | None] = {}
+    used_rows: set[int] = set()
+
+    for key, target in _COMPARE_TARGET_LABELS.items():
+        target_lower = target.lower()
+        target_tokens: set[str] = set(target_lower.split())
+        best: tuple[int, str, str] | None = None
+
+        # Tier 1 — exact case-insensitive.
+        for row, label in candidates:
+            if row in used_rows:
+                continue
+            if label.lower() == target_lower:
+                best = (row, label, "exact")
+                break
+
+        # Tier 2 — substring (target tokens subset of label tokens).
+        if best is None:
+            for row, label in candidates:
+                if row in used_rows:
+                    continue
+                label_tokens = set(label.lower().split())
+                if target_tokens and target_tokens <= label_tokens:
+                    best = (row, label, "substring")
+                    break
+
+        # Tier 3 — fuzzy: Jaccard overlap >= 0.5, pick the highest.
+        if best is None:
+            best_score = 0.0
+            best_fuzzy: tuple[int, str, str] | None = None
+            for row, label in candidates:
+                if row in used_rows:
+                    continue
+                label_tokens = set(label.lower().split())
+                if not label_tokens or not target_tokens:
+                    continue
+                overlap = len(target_tokens & label_tokens)
+                if overlap == 0:
+                    continue
+                score = overlap / max(len(target_tokens), len(label_tokens))
+                if score >= 0.5 and score > best_score:
+                    best_score = score
+                    best_fuzzy = (row, label, "fuzzy")
+            best = best_fuzzy
+
+        out[key] = best
+        if best is not None:
+            used_rows.add(best[0])
+
+    return out

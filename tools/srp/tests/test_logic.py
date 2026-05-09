@@ -432,7 +432,7 @@ class TestCompareSrpAnyTwoVersions:
         lines = compare_srp(confirmed=conf, revised2=rev2)
         lbl, _ = lines[0].adjacent_variances[0]
         assert "Confirmed" in lbl
-        assert "2nd Revised" in lbl
+        assert "Previous Year Revised" in lbl
 
     def test_one_version_raises(self) -> None:
         ind = dict([_mk(1, "A", "S1", "1000.00")])

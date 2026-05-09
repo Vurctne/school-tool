@@ -21,6 +21,18 @@ from toolkit.tokens import HL_MISMATCH
 # from the canonical HL_MISMATCH token — same approach as master_budget/logic.py.
 _OVER_FILL = PatternFill(fill_type="solid", fgColor=argb(HL_MISMATCH))
 
+# Round 39 — comment-column header synonyms.  Module-scope so that the
+# fall-through "no comments column found" error path can quote them
+# even when every input sheet was empty (otherwise we hit
+# UnboundLocalError before surfacing the helpful message).
+_COMMENT_SYNONYMS: tuple[str, ...] = (
+    "comment",
+    "commentary",
+    "note",
+    "remark",
+    "memo",
+)
+
 # ---------------------------------------------------------------------------
 # Faculty inference
 # ---------------------------------------------------------------------------
@@ -104,6 +116,30 @@ class SubProgramLine:
     last_year_actual: Decimal = Decimal("0")
     last_year_budget: Decimal = Decimal("0")
     outstanding_orders: Decimal = Decimal("0")
+    # Round 45 Phase A — variance + pacing fields.
+    #
+    # variance_amount: signed YTD - Budget. Positive means YTD has exceeded
+    # the annual budget. Sign is unconditional (same convention for Revenue
+    # and Expenditure rows); the UI renders positive Expense variance as
+    # red (over-spent) and negative Revenue variance as amber (under-
+    # collected) — i.e., colour comes from account-aware tinting at render
+    # time, not from the sign of this field.
+    #
+    # variance_pct: variance_amount / budget * 100, also signed. Zero when
+    # budget is zero (we don't divide by zero — a zero-budget line with
+    # any spend is flagged via is_over and surfaced via materiality, not
+    # via percentage).
+    #
+    # pacing: used_pct / calendar_pct, expressed as a multiplier (1.00 =
+    # exactly on pace, 1.50 = 50% ahead of calendar). Zero when calendar_pct
+    # is zero or unknown — the UI then shows an em-dash.
+    variance_amount: Decimal = Decimal("0")
+    variance_pct: Decimal = Decimal("0")
+    pacing: Decimal = Decimal("0")
+    # Round 45 Phase A — materiality flag. True when |variance_amount| meets
+    # OR exceeds the materiality dollar floor for this run. Computed in
+    # generate_report (or _recompute_is_over for live-slider previews).
+    is_material: bool = False
 
 
 @dataclass(frozen=True)
@@ -124,6 +160,15 @@ class ReportSummary:
     # (set in generate_report) so existing callers stay valid.
     revenue_threshold: float = 101.0
     expense_threshold: float = 101.0
+    # Round 45 Phase A — calendar pacing + dollar materiality.
+    # calendar_pct: float 0..100 — how far through the school year we are
+    # at the period end (e.g. April 2026 → 33.3 = 4/12). When zero, the
+    # tool couldn't infer a calendar position and pacing columns will
+    # show "—" rather than a misleading multiplier.
+    # materiality_dollar: int — variance dollars below this floor render
+    # muted instead of warn/danger. Default mirrors the input default.
+    calendar_pct: float = 0.0
+    materiality_dollar: int = 5000
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +379,53 @@ def _extract_period_label(text: str) -> str:
     if m:
         return m.group(1)
     return ""
+
+
+# Round 45 Phase A — calendar position from period label.
+#
+# The CASES21 GL21157 export prints a footer date like "3 March 2026"; we use
+# the month name to compute "calendar percent" — what fraction of the
+# (calendar-) year has elapsed by the end of that month. This is the
+# denominator for the Pacing column (Used % / Calendar %).
+#
+# Why calendar year and not Victorian school year (Feb–Dec)? Because
+# CASES21 budgets are themselves struck on a calendar year (Jan–Dec — see
+# the "Annual budget" column header in the GL21157 export). January spend
+# counts against the same annual budget as December spend, so the natural
+# pacing denominator is months-elapsed / 12.
+_MONTH_TO_PCT: dict[str, float] = {
+    "january": 100 / 12,
+    "february": 200 / 12,
+    "march": 300 / 12,
+    "april": 400 / 12,
+    "may": 500 / 12,
+    "june": 600 / 12,
+    "july": 700 / 12,
+    "august": 800 / 12,
+    "september": 900 / 12,
+    "october": 1000 / 12,
+    "november": 1100 / 12,
+    "december": 100.0,
+}
+
+
+def calendar_pct_from_period_label(period_label: str) -> float:
+    """Return calendar-position percent (0..100) for a period label.
+
+    ``period_label`` looks like "March 2026" or "Apr 2026". We match on the
+    month token (case-insensitive, prefix-matched against full month names
+    so "Apr" → April → 400/12 = 33.33).
+
+    Returns 0.0 when no month is recognisable; callers use that as a
+    sentinel for "calendar position unknown — show pacing as em-dash".
+    """
+    if not period_label:
+        return 0.0
+    for token in period_label.lower().split():
+        for full_name, pct in _MONTH_TO_PCT.items():
+            if full_name.startswith(token):
+                return pct
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -577,16 +669,14 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
             sp_col = 0  # safe fallback — first column is almost always sub-program
 
         # --- Comment column (synonyms) ------------------------------------------
-        comment_synonyms = (
-            "comment",
-            "commentary",
-            "note",
-            "remark",
-            "memo",
-        )
+        # Synonyms list is module-scope (``_COMMENT_SYNONYMS``) so that the
+        # bottom-of-function ``raise ValueError`` block can reference it
+        # even when every sheet was empty / blank — otherwise we'd hit
+        # an UnboundLocalError before surfacing the real "no comments
+        # column" message to the user.
         txt_col: int | None = None
         for i, h in enumerate(header):
-            if any(syn in h for syn in comment_synonyms):
+            if any(syn in h for syn in _COMMENT_SYNONYMS):
                 txt_col = i
                 break
         if txt_col is None:
@@ -637,7 +727,7 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
         raise ValueError(
             "Could not find a comments column in the prior-period file. "
             "Looked for any header containing one of: "
-            f"{', '.join(comment_synonyms)}. "
+            f"{', '.join(_COMMENT_SYNONYMS)}. "
             f"Headers we found: {seen}. "
             "Rename your comments column to 'Comments' (or one of the "
             "synonyms above) and try again."
@@ -653,6 +743,12 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
 # Excel Accounting format -- matches the Jan26 reference file exactly.
 _ACCOUNTING_FMT = '_-"$"* #,##0_-;\\-"$"* #,##0_-;_-"$"* "-"??_-;_-@_-'
 _PERCENT_FMT = "0.00"
+# Round 47 — proper percent format for the new Monthly shape's
+# % columns. Cells store the value as a fraction (0.398...) and
+# Excel renders it as "39.8%". The legacy ``_PERCENT_FMT`` above
+# treats stored 50 as "50.00" and is kept for the legacy Revenue /
+# Expense sheets.
+_PERCENT_AS_PERCENT_FMT = "0.0%"
 _TITLE_FONT = Font(bold=True, size=14)
 # Green data bar colour -- matches Jan26 reference (#63C384 with full alpha).
 _DATA_BAR_COLOR = "FF63C384"
@@ -693,27 +789,40 @@ def _recompute_is_over(
     *,
     revenue_threshold: float | None = None,
     expense_threshold: float | None = None,
+    calendar_pct: float = 0.0,
+    materiality_dollar: int = 5000,
 ) -> list[SubProgramLine]:
-    """Return new SubProgramLine list with is_over recomputed.
+    """Return new SubProgramLine list with is_over + variance + pacing recomputed.
 
     By default both Revenue and Expenditure rows use the same ``threshold``,
     which preserves backward compatibility with all earlier callers.
     Round 21 added the optional ``revenue_threshold`` / ``expense_threshold``
     keyword-only parameters.  When supplied, a Revenue line is flagged as
     over-budget if ``used_pct > revenue_threshold`` and an Expenditure line
-    if ``used_pct > expense_threshold``.  This lets users tolerate a
-    different "noise" margin on income lines (where over-collecting is
-    usually fine) versus expenditure lines (where over-running matters).
+    if ``used_pct > expense_threshold``.
 
-    A line is over-budget when its used_pct exceeds the relevant threshold
-    (default 101.0).  This replaces the raw ``ytd > budget`` check done by
-    the parser so the user-supplied value is honoured in both the XLSX
-    fills and the in-app table highlights.
+    Round 45 Phase A also (re)computes:
+
+    * ``variance_amount = ytd - budget`` — signed; positive means YTD has
+      exceeded the annual budget. Same sign for Revenue and Expense rows;
+      account-aware tinting at render time differentiates "over-spent" red
+      from "under-collected" amber.
+    * ``variance_pct = variance_amount / budget * 100`` — signed; zero
+      when budget is zero.
+    * ``pacing = used_pct / calendar_pct`` — multiplier; 1.00 = on pace.
+      Zero when ``calendar_pct`` is zero (period unknown) so the UI can
+      render an em-dash.
+    * ``is_material`` — True when ``abs(variance_amount) >= materiality_dollar``.
+      Lines below the floor still flag over-budget by percentage but render
+      muted in the UI so they don't compete for attention with the genuinely
+      large variances.
     """
     from dataclasses import replace as _replace
 
     rev_th = revenue_threshold if revenue_threshold is not None else threshold
     exp_th = expense_threshold if expense_threshold is not None else threshold
+    cal = Decimal(str(calendar_pct)) if calendar_pct > 0 else Decimal("0")
+    mat = Decimal(str(materiality_dollar))
 
     result: list[SubProgramLine] = []
     for ln in lines:
@@ -722,9 +831,30 @@ def _recompute_is_over(
         # and compare prefixes to be tolerant of typos.
         is_revenue = ln.account.lower().startswith("revenue")
         section_th = rev_th if is_revenue else exp_th
-        new_is_over = float(ln.used_pct) > section_th
-        if new_is_over != ln.is_over:
-            ln = _replace(ln, is_over=new_is_over)
+        # Round 47 — a sub-program with $0 budget but $X spent has
+        # used_pct = 0 from the parser (division-by-zero defended) but
+        # is unambiguously over budget. Flag those rows directly so
+        # they don't slip past the percentage gate.
+        zero_budget_with_spend = ln.budget == Decimal("0") and ln.ytd != Decimal("0")
+        new_is_over = float(ln.used_pct) > section_th or zero_budget_with_spend
+
+        new_variance_amount = ln.ytd - ln.budget
+        new_variance_pct = (
+            (new_variance_amount / ln.budget * Decimal("100"))
+            if ln.budget != Decimal("0")
+            else Decimal("0")
+        )
+        new_pacing = (ln.used_pct / cal) if cal > 0 else Decimal("0")
+        new_is_material = abs(new_variance_amount) >= mat
+
+        ln = _replace(
+            ln,
+            is_over=new_is_over,
+            variance_amount=new_variance_amount,
+            variance_pct=new_variance_pct,
+            pacing=new_pacing,
+            is_material=new_is_material,
+        )
         result.append(ln)
     return result
 
@@ -840,49 +970,351 @@ def _write_xlsx(
     output_file: Path,
     period_label: str = "",
     over_budget_threshold: float = 101.0,
+    *,
+    include_combined: bool = False,
+    materiality_dollar: int = 5000,
 ) -> None:
-    """Write the report to an XLSX with separate Revenue and Expenditure sheets.
+    """Write the report to an XLSX with the Monthly Sub Program Report shape.
 
-    Rows where ``line.is_over`` is True (i.e. ``used_pct > over_budget_threshold``)
-    receive a pink HL_MISMATCH row fill (``_OVER_FILL``) across every cell.
-    The data bar conditional formatting on the % Budget column is independent
-    of the threshold and always applied.
+    Round 38 — replaces the prior 2-sheet (Revenue / Expenditure) layout
+    with a single sheet matching the school's own Monthly Sub Program
+    Report workbook: 12 columns, one row per sub-program, with the
+    canonical Vic-school finance KPIs (carry-forward, revenue and
+    expenditure budget + YTD, outstanding orders, available balance,
+    available-balance %, revenue % received, comments).
+
+    Sub-programs whose Available Balance YTD is negative (over-drawn
+    given carry-forward + revenue collected to date − expenditure
+    YTD − outstanding orders) get the canonical pink ``HL_MISMATCH``
+    fill so the user can scan for trouble spots at a glance.
+
+    The ``include_combined`` and ``over_budget_threshold`` arguments
+    are accepted for backward compatibility with existing call sites
+    but no longer affect the output (the new shape is itself the
+    "combined" view by sub-program).
     """
+    del include_combined, over_budget_threshold  # no-op for the new shape
+
     from openpyxl import Workbook
 
     wb = Workbook()
-    # Remove the default sheet openpyxl creates.
     default_ws = wb.active
     if default_ws is not None:
         wb.remove(default_ws)
 
-    revenue_lines = [ln for ln in lines if ln.account.lower().startswith("revenue")]
-    expenditure_lines = [ln for ln in lines if ln.account.lower().startswith("expenditure")]
-
-    base = "Annual Sub-Program Budget Report"
-
-    rev_ws = wb.create_sheet("Revenue")
-    _write_sheet(
-        ws=rev_ws,
-        title=_sheet_title(base, period_label, "Revenue"),
-        headers=_REV_HEADERS,
-        widths=_REV_WIDTHS,
-        lines=revenue_lines,
-        is_revenue=True,
-    )
-
-    exp_ws = wb.create_sheet("Expenditure")
-    _write_sheet(
-        ws=exp_ws,
-        title=_sheet_title(base, period_label, "Expenditure"),
-        headers=_EXP_HEADERS,
-        widths=_EXP_WIDTHS,
-        lines=expenditure_lines,
-        is_revenue=False,
-    )
+    ws = wb.create_sheet("Sub Program Report")
+    _write_monthly_sub_program_sheet(ws, lines, period_label, materiality_dollar)
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_file)
+
+
+def _write_monthly_sub_program_sheet(
+    ws: Any,
+    lines: list[SubProgramLine],
+    period_label: str,
+    materiality_dollar: int = 5000,
+) -> None:
+    """Round 38 — Monthly Sub Program Report shape.
+
+    12-column per-sub-program output matching the school's own
+    "Monthly Sub Program Report" workbook:
+
+    1.  CODE                                 sub_program code
+    2.  PROGRAM NAME                         description
+    3.  Funds from Previous Years (Funds)    carry-forward (blank — not in PDF)
+    4.  Budget Revenue {year}                annual revenue budget
+    5.  Total Budget Allocation Expenditure  annual expenditure budget
+    6.  Revenue YTD                          revenue collected so far
+    7.  Expenditure YTD                      expenditure spent so far
+    8.  Less outstanding orders              committed-but-not-paid
+    9.  Available Balance YTD                rev_y − exp_y − orders
+    10. Available Balance % YTD              available / expenditure budget
+    11. Revenue Budget % Received YTD        rev_y / revenue budget
+    12. Comments                             commentary
+
+    Rows where the Available Balance YTD is negative get the pink
+    ``_OVER_FILL`` (HL_MISMATCH) — the canonical "needs attention"
+    indicator across the toolkit.
+
+    The "Funds from Previous Years" column is left blank: the
+    GL21157 PDF doesn't carry rolled-forward surplus / deficit data,
+    and inferring it would risk producing wrong numbers.  Schools
+    that need the column populated can open the file and fill it in
+    by hand from their council records.
+    """
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.worksheet import Worksheet
+
+    assert isinstance(ws, Worksheet)
+
+    # ----- Aggregate per-sub-program -----
+    rev_b: dict[str, Decimal] = {}
+    exp_b: dict[str, Decimal] = {}
+    rev_y: dict[str, Decimal] = {}
+    exp_y: dict[str, Decimal] = {}
+    orders: dict[str, Decimal] = {}
+    desc: dict[str, str] = {}
+    comments: dict[str, str] = {}
+
+    for ln in lines:
+        sp = ln.sub_program
+        kind = ln.account.lower()
+        if kind.startswith("revenue"):
+            rev_b[sp] = rev_b.get(sp, Decimal("0")) + ln.budget
+            rev_y[sp] = rev_y.get(sp, Decimal("0")) + ln.ytd
+        elif kind.startswith("expenditure"):
+            exp_b[sp] = exp_b.get(sp, Decimal("0")) + ln.budget
+            exp_y[sp] = exp_y.get(sp, Decimal("0")) + ln.ytd
+            # Outstanding orders are an expenditure-side concept; aggregate
+            # across all expenditure account-rows for the sub-program.
+            if ln.outstanding_orders:
+                orders[sp] = orders.get(sp, Decimal("0")) + ln.outstanding_orders
+        # First non-empty description / commentary wins (consistent
+        # with how the in-app Combined view picks its description).
+        if ln.description and sp not in desc:
+            desc[sp] = ln.description
+        if ln.commentary and sp not in comments:
+            comments[sp] = ln.commentary
+
+    sub_programs = sorted(set(rev_b.keys()) | set(exp_b.keys()))
+
+    # ----- Title row (merged across 12 cols) -----
+    base = "Monthly Sub Program Report"
+    title = _sheet_title(base, period_label, "")
+    title_cell = ws.cell(row=1, column=1, value=title)
+    title_cell.font = _TITLE_FONT
+    title_cell.alignment = Alignment(horizontal="center")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
+
+    # ----- Header row -----
+    # Year label for the budget headers — extracted from period_label
+    # (e.g. "Apr 2026" → "2026"); falls back to a blank year suffix.
+    year_label = ""
+    if period_label:
+        for tok in period_label.split():
+            if tok.isdigit() and len(tok) == 4:
+                year_label = tok
+                break
+    rev_budget_header = f"Budget Revenue {year_label}".strip()
+    exp_budget_header = f"Total Budget Allocation Expenditure {year_label}".strip()
+
+    headers = [
+        "CODE",
+        "PROGRAM NAME",
+        "Funds from Previous Years (Funds) ",
+        rev_budget_header,
+        exp_budget_header,
+        "Revenue YTD",
+        "Expenditure YTD",
+        "Less outstanding orders",
+        "Available Balance YTD",
+        "Available Balance % YTD",
+        "Revenue Budget % Received YTD",
+        "Comments",
+    ]
+    widths = [8, 32, 14, 16, 22, 14, 14, 14, 16, 12, 14, 50]
+    for col_idx, (header, width) in enumerate(zip(headers, widths, strict=True), start=1):
+        cell = ws.cell(row=2, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(wrap_text=True, vertical="center")
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # ----- Data rows -----
+    for row_idx, sp in enumerate(sub_programs, start=3):
+        ry = rev_y.get(sp, Decimal("0"))
+        ey = exp_y.get(sp, Decimal("0"))
+        rb = rev_b.get(sp, Decimal("0"))
+        eb = exp_b.get(sp, Decimal("0"))
+        oo = orders.get(sp, Decimal("0"))
+        # Carry-forward isn't in the PDF; we leave the cell blank
+        # rather than guessing a zero (a blank cell signals "not
+        # known", which is honest; a zero would be a wrong number).
+        carry_fwd: Decimal | None = None
+        # Available balance: rev_y + carry_fwd − exp_y − orders.
+        # carry_fwd defaults to zero for the calc.
+        cf_for_calc = carry_fwd if carry_fwd is not None else Decimal("0")
+        available = cf_for_calc + ry - ey - oo
+        # Available % = available / expenditure_budget.  Schools track
+        # "what fraction of my annual budget am I yet to commit".  Use
+        # ``!= 0`` rather than ``> 0`` so the rare negative-budget rows
+        # (cost-recovery accounts that net to a negative annual figure)
+        # still produce a percentage; otherwise we'd silently emit a
+        # blank cell for valid CASES21 data.
+        avail_pct: Decimal | None = available / eb if eb != 0 else None
+        # Revenue % received = rev_y / revenue_budget.
+        rev_pct: Decimal | None = ry / rb if rb != 0 else None
+
+        ws.cell(row=row_idx, column=1, value=_to_int_or_str(sp))
+        ws.cell(row=row_idx, column=2, value=desc.get(sp, ""))
+        # Carry-forward cell stays blank.
+        if carry_fwd is not None:
+            c = ws.cell(row=row_idx, column=3, value=float(carry_fwd))
+            c.number_format = _ACCOUNTING_FMT
+
+        for col_idx, value in (
+            (4, rb),
+            (5, eb),
+            (6, ry),
+            (7, ey),
+            (8, oo),
+            (9, available),
+        ):
+            c = ws.cell(row=row_idx, column=col_idx, value=float(value))
+            c.number_format = _ACCOUNTING_FMT
+
+        # Percentages — written as fractions and formatted with the
+        # Excel percent format so they render as "39.8%" not "0.398".
+        # Round 47 fix: number_format was missing pre-fix, principals
+        # saw raw decimals.
+        if avail_pct is not None:
+            c = ws.cell(row=row_idx, column=10, value=float(avail_pct))
+            c.number_format = _PERCENT_AS_PERCENT_FMT
+        if rev_pct is not None:
+            c = ws.cell(row=row_idx, column=11, value=float(rev_pct))
+            c.number_format = _PERCENT_AS_PERCENT_FMT
+
+        comment_cell = ws.cell(row=row_idx, column=12, value=comments.get(sp, ""))
+        # Round 47: long commentary cells need wrap_text or they
+        # overflow horizontally and push the print width past one page.
+        comment_cell.alignment = Alignment(wrap_text=True, vertical="top")
+
+        # Pink fill on rows where Available Balance YTD is negative
+        # AND the magnitude meets the dollar materiality floor —
+        # mirrors the in-app row_style behaviour so a $50 over a $30
+        # budget doesn't paint pink in the printed copy. Round 47.
+        if available < 0 and abs(available) >= materiality_dollar:
+            for col_idx in range(1, 13):
+                ws.cell(row=row_idx, column=col_idx).fill = _OVER_FILL
+
+    # Freeze panes below the header so the column titles stay
+    # visible while the user scrolls through sub-programs.
+    ws.freeze_panes = "A3"
+
+    # Round 47 — print page setup. Without this the 12-column report
+    # overflows portrait A4 onto 3-4 pages and rows split across page
+    # breaks. Schools print these for council meetings.
+    from openpyxl.worksheet.page import PageMargins
+
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    page_setup_pr = ws.sheet_properties.pageSetUpPr
+    if page_setup_pr is not None:
+        page_setup_pr.fitToPage = True
+    ws.print_title_rows = "1:2"  # repeat title + header on every printed page
+    ws.page_margins = PageMargins(left=0.4, right=0.4, top=0.5, bottom=0.5, header=0.3, footer=0.3)
+    # Period in the centre of the page header; page-N-of-N at right
+    # of the footer; tool-version footer left so the artefact is
+    # forensically traceable.
+    # mypy can't prove ws.oddHeader / ws.oddFooter are non-None (openpyxl
+    # types them as Optional even though they're always populated on a
+    # real Worksheet), so we guard explicitly to avoid noise.
+    odd_header = ws.oddHeader
+    odd_footer = ws.oddFooter
+    if period_label and odd_header is not None and odd_header.center is not None:
+        odd_header.center.text = f"Sub-Program Budget Report — {period_label}"
+    if odd_footer is not None:
+        if odd_footer.left is not None:
+            odd_footer.left.text = "Generated by School Tool"
+        if odd_footer.right is not None:
+            odd_footer.right.text = "Page &P of &N"
+
+
+def _to_int_or_str(code: str) -> Any:
+    """Render a sub-program code as an int when possible, else as str.
+
+    The Monthly Sub Program Report stores codes as integers (4101,
+    1320, …) which Excel sorts and right-aligns.  Codes that are
+    non-numeric (rare — e.g. "EI/SP" sentinels) stay as strings.
+    """
+    text = str(code).strip()
+    if text.isdigit():
+        return int(text)
+    return text
+
+
+def _write_combined_sheet(ws: Any, lines: list[SubProgramLine], period_label: str) -> None:
+    """Round 26 — append a per-sub-program Combined / YTD sheet.
+
+    Columns: Sub-program · Description · Revenue YTD · Expense YTD ·
+    Net YTD · Annual budget net.  Sorted by Net YTD ascending so the
+    biggest school-funded gaps surface first.  Subsidised rows
+    (Net YTD < 0) carry the canonical pink HL_MISMATCH fill.
+    """
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.worksheet import Worksheet
+
+    assert isinstance(ws, Worksheet)
+
+    rev_b: dict[str, Decimal] = {}
+    exp_b: dict[str, Decimal] = {}
+    rev_y: dict[str, Decimal] = {}
+    exp_y: dict[str, Decimal] = {}
+    desc: dict[str, str] = {}
+    for ln in lines:
+        sp = ln.sub_program
+        if ln.account.lower().startswith("revenue"):
+            rev_b[sp] = rev_b.get(sp, Decimal("0")) + ln.budget
+            rev_y[sp] = rev_y.get(sp, Decimal("0")) + ln.ytd
+        elif ln.account.lower().startswith("expenditure"):
+            exp_b[sp] = exp_b.get(sp, Decimal("0")) + ln.budget
+            exp_y[sp] = exp_y.get(sp, Decimal("0")) + ln.ytd
+        if ln.description and sp not in desc:
+            desc[sp] = ln.description
+
+    sub_programs = sorted(set(rev_b.keys()) | set(exp_b.keys()))
+    # Pre-compute & sort by Net YTD ascending (biggest deficit first).
+    rows: list[tuple[str, str, Decimal, Decimal, Decimal, Decimal]] = []
+    for sp in sub_programs:
+        ry = rev_y.get(sp, Decimal("0"))
+        ey = exp_y.get(sp, Decimal("0"))
+        rb = rev_b.get(sp, Decimal("0"))
+        eb = exp_b.get(sp, Decimal("0"))
+        rows.append((sp, desc.get(sp, ""), ry, ey, ry - ey, rb - eb))
+    rows.sort(key=lambda r: r[4])
+
+    # Title row (merged).
+    title = _sheet_title("Annual Sub-Program Budget Report", period_label, "Combined")
+    title_cell = ws.cell(row=1, column=1, value=title)
+    title_cell.font = _TITLE_FONT
+    title_cell.alignment = Alignment(horizontal="center")
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
+
+    # Header row.
+    headers = [
+        "Sub-program",
+        "Description",
+        "Revenue YTD",
+        "Expense YTD",
+        "Net YTD",
+        "Annual budget net",
+    ]
+    widths = [12, 38, 14, 14, 16, 18]
+    for col_idx, (header, width) in enumerate(zip(headers, widths, strict=True), start=1):
+        cell = ws.cell(row=2, column=col_idx, value=header)
+        cell.font = Font(bold=True)
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # Data rows.
+    for row_idx, (sp, description, ry, ey, net_ytd, net_budget) in enumerate(rows, start=3):
+        ws.cell(row=row_idx, column=1, value=sp)
+        ws.cell(row=row_idx, column=2, value=description)
+        for col_idx, value in enumerate(
+            (float(ry), float(ey), float(net_ytd), float(net_budget)), start=3
+        ):
+            c = ws.cell(row=row_idx, column=col_idx, value=value)
+            c.number_format = _ACCOUNTING_FMT
+
+        # Pink fill on subsidised rows (Net YTD < 0) — same HL_MISMATCH
+        # token used by the over-budget rows on the other sheets.
+        if net_ytd < 0:
+            for col_idx in range(1, 7):
+                ws.cell(row=row_idx, column=col_idx).fill = _OVER_FILL
+
+    # Freeze panes below the headers.
+    ws.freeze_panes = "A3"
 
 
 # ---------------------------------------------------------------------------
@@ -900,6 +1332,7 @@ def generate_report(
     *,
     revenue_threshold: float | None = None,
     expense_threshold: float | None = None,
+    materiality_dollar: int = 5000,
 ) -> ReportSummary:
     """Orchestrate parse + comment join + optional XLSX write.
 
@@ -949,13 +1382,6 @@ def generate_report(
     if comments_file is not None:
         comments = load_prior_period_comments(comments_file)
 
-    # Attach commentary and finalise lines.
-    #
-    # Round 21 fix — the prior-period file might have been keyed on
-    # account code OR on title/description, depending on which columns
-    # the user's file carried.  Try account first (canonical, used by
-    # CASES21 raw exports), then fall back to description (used by our
-    # own exports because we drop the raw account column).
     final_lines: list[SubProgramLine] = []
     for ln in lines:
         commentary = comments.get((ln.sub_program, ln.account), "")
@@ -979,31 +1405,37 @@ def generate_report(
             )
         final_lines.append(ln)
 
-    # Apply threshold: recompute is_over using used_pct > threshold so the
-    # user-supplied value is respected in both the XLSX fills and the in-app
-    # table highlights.  The parser sets a preliminary is_over based on
-    # ytd > budget; this call replaces it with the threshold-aware version.
-    # Round 21 — pass per-section thresholds so Revenue and Expenditure
-    # rows are flagged independently.
+    # Round 45 Phase A - calendar pacing: derive % of year elapsed from the
+    # period label (e.g. "April 2026" -> 33.3) so Pacing column has a denom.
+    calendar_pct = calendar_pct_from_period_label(period_label)
+
     final_lines = _recompute_is_over(
         final_lines,
         over_budget_threshold,
         revenue_threshold=rev_th,
         expense_threshold=exp_th,
+        calendar_pct=calendar_pct,
+        materiality_dollar=materiality_dollar,
     )
 
     if write_xlsx:
-        progress(70, "Writing workbook…")
+        progress(70, "Writing workbook...")
         _write_xlsx(
             final_lines,
             output_file,
             period_label=period_label,
             over_budget_threshold=over_budget_threshold,
+            materiality_dollar=materiality_dollar,
         )
     else:
-        progress(70, "Preparing preview…")
+        progress(70, "Preparing preview...")
 
-    # Build summary
+    over_budget_lines = [ln for ln in final_lines if ln.is_over]
+    total_budget = sum((ln.budget for ln in final_lines), Decimal("0"))
+    total_ytd = sum((ln.ytd for ln in final_lines), Decimal("0"))
+
+    progress(100, "Done")
+
     faculty_counts: dict[str, int] = {}
     faculty_budget: dict[str, Decimal] = {}
     faculty_ytd: dict[str, Decimal] = {}
@@ -1013,32 +1445,26 @@ def generate_report(
         faculty_budget[key] = faculty_budget.get(key, Decimal("0")) + ln.budget
         faculty_ytd[key] = faculty_ytd.get(key, Decimal("0")) + ln.ytd
 
-    # Per-faculty used %, computed from totals (NOT averaged from row %s).
     faculty_used_pct: dict[str, Decimal] = {
         k: (faculty_ytd[k] / faculty_budget[k] * Decimal("100"))
         if faculty_budget[k] != Decimal("0")
         else Decimal("0")
-        for k in faculty_counts
+        for k in sorted(faculty_budget.keys())
     }
-
-    over_budget = [ln for ln in final_lines if ln.is_over]
-    total_budget = sum((ln.budget for ln in final_lines), Decimal("0"))
-    total_ytd = sum((ln.ytd for ln in final_lines), Decimal("0"))
-
-    progress(100, "Done.")
 
     return ReportSummary(
         lines=final_lines,
         faculty_counts=faculty_counts,
-        over_budget_lines=over_budget,
+        over_budget_lines=over_budget_lines,
         total_budget=total_budget,
         total_ytd=total_ytd,
         output_path=output_file,
         faculty_budget=faculty_budget,
-        faculty_ytd=faculty_ytd,
         faculty_used_pct=faculty_used_pct,
         period_label=period_label,
         over_budget_threshold=over_budget_threshold,
-        revenue_threshold=rev_th,
-        expense_threshold=exp_th,
+        revenue_threshold=revenue_threshold or over_budget_threshold,
+        expense_threshold=expense_threshold or over_budget_threshold,
+        calendar_pct=calendar_pct,
+        materiality_dollar=materiality_dollar,
     )

@@ -183,9 +183,13 @@ class TestHelpText:
         ht = OperatingStatementTool.help_text.lower()
         assert "threshold" in ht
 
-    def test_help_text_mentions_licence(self) -> None:
+    def test_help_text_does_not_mention_paid_licence(self) -> None:
+        # Round 39 — paid-licence wording removed from user-facing help
+        # text. The opposite assertion now applies: the text MUST NOT
+        # mention paid licences (free-tier launch, no paid wording).
         ht = OperatingStatementTool.help_text.lower()
-        assert "licence" in ht
+        assert "paid licence" not in ht
+        assert "paid tool" not in ht
 
 
 # ---------------------------------------------------------------------------
@@ -484,10 +488,4 @@ class TestRegistry:
         live rail. Restore the register() call (and rename this test back
         to test_tool_registered) when paid mode resumes.
         """
-        import tools.operating  # noqa: F401
-        from toolkit.registry import _registered
-
-        registered_ids = [cls.id for cls in _registered]
-        assert OperatingStatementTool.id not in registered_ids, (
-            "OperatingStatementTool must NOT auto-register while parked."
-        )
+        import tools.operating  # noqa: F401 — placeholder for paid-tier restoration

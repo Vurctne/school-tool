@@ -7,10 +7,16 @@ APP_NAME = "School Tool"
 # REVISION must stay at 0 — Microsoft Store rejects MSIX submissions with
 # REVISION != 0. Bump MAJOR/MINOR manually; reset BUILD/REVISION to 0/0
 # when you do.
-APP_VERSION = "2.1.1.0"
+APP_VERSION = "2.2.9.0"
 APP_AUTHOR = "Vurctne"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
-SUPPORT_EMAIL = "Vurctne@gmail.com"
+SUPPORT_EMAIL = "feedback@schooltool.com.au"
+# Round 42 — second mailbox for non-feedback queries (account help,
+# bug reports needing back-and-forth, partnership / Store / press
+# enquiries, anything that needs an actual human reply). This inbox
+# is human-monitored; SUPPORT_EMAIL (feedback@) is AI-monitored and
+# gets a weekly digest, not a per-message reply.
+CONTACT_EMAIL = "contact@schooltool.com.au"
 APP_SLUG = "school-tool"
 APP_INSTALLER_ID = "{f07881a0-d07c-45ae-bf32-c5ce54c87220}"
 # Microsoft Store identity (Round 16). See docs/store_publish.md.
@@ -22,6 +28,6 @@ STORE_PUBLISHER_DISPLAY_NAME = "Vurctne"
 API_BASE_URL = "https://sft-api.mfiking.workers.dev"
 # Ed25519 public key for licence verification (server keypair populated in M2).
 LICENCE_PUBLIC_KEY = b"wcRc4HvZF4C1jwvB6X7QHenidUlo6XQIPro4wLuMp7A="
-# Show the User tab in the left rail. False during free-tier launch (no
-# accounts, no licences). Flip to True when paid mode resumes.
+# Show the User tab in the left rail. Currently False — the User tab
+# (account / service / invoices) is not shown to end users.
 SHOW_USER_TAB: bool = False
