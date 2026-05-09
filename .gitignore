@@ -92,3 +92,4 @@ Samples/
 
 # Keypair script backups
 *.bak
+.claude/
