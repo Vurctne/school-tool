@@ -5,6 +5,48 @@ is at the top.
 
 ---
 
+## v2.4.15.0 — May 2026
+
+* **Sub-Program Budget Report — parser fix for zero-spend rows.**
+  The GL21157 PDF omits the YTD column entirely when a sub-program
+  has had no spend this year (the percent shows as `0.00` instead).
+  Pre-fix the parser silently shifted everything one column to the
+  left — Annual budget read as YTD, Last-year budget read as Annual
+  budget. ~20% of the rows in a typical school budget had wrong
+  numbers as a result. Now disambiguates by the percent value: when
+  `pct == 0`, the YTD column is treated as omitted and the Annual
+  budget shifts back to its correct slot. Affected rows include
+  Photography (4010), Instrumental Music (4016), Magazine (8851)
+  and many others. The unbudgeted-spend pattern (e.g. School Saving
+  Bonus) and the no-budget-no-spend pattern (e.g. discontinued
+  programs like 4051, 4290) are also now handled correctly.
+* **Sub-Program Budget Report — negative numbers print red.** Every
+  dollar column in the exported XLSX now renders negatives in red
+  via the Excel `[Red]` accounting format. A council reader can spot
+  deficits / over-spends at a glance without having to scan for the
+  leading minus sign. Also applied to the Available Balance % YTD
+  and Revenue Budget % Received YTD columns.
+* **Sub-Program Budget Report — pink fill follows Status, not
+  Available Balance.** Pre-fix the pink "needs attention" highlight
+  fired on rows where Available Balance YTD was below the dollar
+  materiality floor. After Round 56 the Status pill switched to a
+  pure threshold compare (`exp_ytd > expense_threshold% × annual_exp_budget`)
+  but the pink fill kept the old Available Balance signal — programs
+  that spend at the expected rate but whose revenue arrives in lumps
+  (parent payments at start of term) sat at `available < 0` for
+  half the year while Status correctly read "On track", causing
+  many On-track rows to print pink. Now the pink fill fires only
+  when Status itself is non-OK; the two signals can no longer
+  contradict.
+* **Sub-Program Budget Report — `compute_status_pill` and other
+  logic.py defaults lowered to $100 too.** Round 58 (v2.4.14.0)
+  lowered the user-facing NumberInput default from $5,000 to $100;
+  this round propagates the same default through the function
+  signatures so callers that don't pass `materiality_dollar`
+  explicitly see the same behaviour as the UI.
+
+---
+
 ## v2.4.14.0 — May 2026
 
 * **Sub-Program Budget Report — "Ignore amounts under" default

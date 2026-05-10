@@ -248,7 +248,7 @@ def compute_status_pill(
     annual_rev_budget: Decimal = Decimal("0"),
     rev_ytd: Decimal = Decimal("0"),
     expense_threshold: float = 101.0,
-    materiality_dollar: int = 5000,
+    materiality_dollar: int = 100,
 ) -> str:
     """Return a plain-English Status pill for one sub-program.
 
@@ -535,7 +535,7 @@ def compute_trend(
     current_available: Decimal,
     prior_available: Decimal | None,
     current_status: str = "",
-    materiality_dollar: int = 5000,
+    materiality_dollar: int = 100,
 ) -> str:
     """Return a Trend pill for one sub-program row.
 
@@ -913,7 +913,7 @@ class ReportSummary:
     expense_threshold: float = 101.0
     # Round 45 Phase A — dollar materiality. Round 56 dropped the
     # ``calendar_pct`` field along with all pacing-based judgements.
-    materiality_dollar: int = 5000
+    materiality_dollar: int = 100
     # Round 57 — carry-forward funds loaded from a prior-period XLSX
     # via :func:`load_prior_period_funds`. Empty dict when no prior
     # file was supplied. The writer reads this and populates the
@@ -972,19 +972,38 @@ def _build_line(
     Expenditure rows:
         Last year actual | Last year budget | Annual budget | YTD | % | Outstanding | Uncommitted
 
-    Column layout varies: some rows omit early columns when zero (particularly
-    last-year columns), and YTD is omitted when it is zero (pct then shows 0.00).
+    Column layout varies: the GL21157 PDF omits zero-valued columns
+    rather than showing them as 0. The most common omission is the
+    YTD column when there has been no spend this year — the row then
+    shows ``... Annual_budget 0.00 [Orders] [Uncommitted]`` instead
+    of ``... Annual_budget YTD 0.00 [Orders] [Uncommitted]``.
 
-    Strategy
-    --------
-    1. Locate the % token (has a decimal point, 0 <= value <= 9999) by scanning
-       right-to-left; this is always present.
-    2. ``pre`` = tokens before %; ``post`` = tokens after %.
-    3. budget = pre[-2], ytd = pre[-1]  (if len(pre) >= 2; existing logic).
-    4. last_year_budget = pre[-3] if len(pre) >= 3 else zero.
-    5. last_year_actual  = pre[-4] if len(pre) >= 4 else zero.
-    6. outstanding_orders (Expenditure only): post[0] if len(post) >= 2; zero
-       if post has only one token (that token is then Uncommitted Balance).
+    Round 58 fix
+    ------------
+    Pre-R58 the parser assumed ``pre[-1]`` was always YTD and
+    ``pre[-2]`` was always Annual budget. For the (very common!)
+    zero-spend rows that misread Annual budget as YTD and Last-year
+    budget as Annual budget, producing wrong Status pills and
+    wrong totals across ~20% of typical school budgets. The new
+    rule uses the percent value as a disambiguator:
+
+    * ``pct > 0``: YTD is shown. Standard parse —
+      ``ytd = pre[-1]``, ``budget = pre[-2]``.
+    * ``pct == 0`` AND ``post`` is non-empty: YTD is omitted; the
+      Annual budget shifts right one position. ``ytd = 0``,
+      ``budget = pre[-1]``, last-year columns shift left by 1.
+    * ``pct == 0`` AND ``post`` is empty AND ``len(pre) >= 2``: no
+      Annual budget shown either (program discontinued / no current
+      allocation). ``budget = 0, ytd = 0``; the 2 pre tokens are
+      Last-year columns.
+    * ``pct == 0`` AND ``post`` is empty AND ``len(pre) == 1``:
+      unbudgeted spend (e.g. School Saving Bonus). ``ytd = pre[0]``,
+      ``budget = 0``.
+
+    Outstanding orders (Expenditure only): the first token after %
+    when len(post) >= 2 (the second token is the Uncommitted Balance,
+    derived). When len(post) == 1 only Uncommitted is shown and
+    Orders is zero.
     """
     pct = Decimal("0")
     budget = Decimal("0")
@@ -1030,25 +1049,47 @@ def _build_line(
         pre = tokens
         post = []
 
-    # From pre: last = YTD, second-last = Annual budget (if >= 2 tokens)
-    if len(pre) >= 2:
+    # Round 58 — disambiguate by the pct value. See docstring above.
+    if pct == 0 and len(pre) >= 2 and not post:
+        # Case: no Annual budget shown (post empty). The 2+ pre tokens
+        # are Last-year columns; Annual budget and YTD are both blank.
+        # Examples: 4051 Dance Activities, 4290 Sports Programs, 8401
+        # Excursions (programs with no current-year allocation).
+        budget = Decimal("0")
+        ytd = Decimal("0")
+        last_year_budget = parse_decimal(pre[-1])
+        if len(pre) >= 2:
+            last_year_actual = parse_decimal(pre[-2])
+    elif pct == 0 and len(pre) >= 2:
+        # Case: YTD column omitted (zero spend) but Annual budget
+        # present. pre[-1] is Annual budget, NOT YTD. Last-year
+        # columns shift left by one.
+        # Examples: 4010 Photography, 4016 Instrumental Music, 8851
+        # Magazine — programs that have not yet spent this year.
+        ytd = Decimal("0")
+        budget = parse_decimal(pre[-1])
+        if len(pre) >= 2:
+            last_year_budget = parse_decimal(pre[-2])
+        if len(pre) >= 3:
+            last_year_actual = parse_decimal(pre[-3])
+    elif len(pre) >= 2:
+        # Standard parse: pct > 0 implies YTD is shown.
         ytd = parse_decimal(pre[-1])
         budget = parse_decimal(pre[-2])
+        if len(pre) >= 3:
+            last_year_budget = parse_decimal(pre[-3])
+        if len(pre) >= 4:
+            last_year_actual = parse_decimal(pre[-4])
     elif len(pre) == 1:
-        # Only one token before %: treat as YTD; budget is zero
+        # Only one token before %: unbudgeted spend (e.g. 8505 School
+        # Saving Bonus). The single value is YTD; budget is zero.
         ytd = parse_decimal(pre[-1])
         budget = Decimal("0")
-    # else: both remain 0
-
-    # Last-year columns sit immediately before Annual budget in pre.
-    if len(pre) >= 3:
-        last_year_budget = parse_decimal(pre[-3])
-    if len(pre) >= 4:
-        last_year_actual = parse_decimal(pre[-4])
+    # else: empty pre — both remain 0 (degenerate row, leave defaults)
 
     # Outstanding orders: only meaningful for Expenditure rows.
     # When present it is the FIRST token after %; the second (if any) is
-    # Uncommitted Balance (derived, not stored).  When outstanding is zero the
+    # Uncommitted Balance (derived, not stored). When outstanding is zero the
     # PDF omits it entirely, leaving only Uncommitted Balance in post.
     if section == "Expenditure" and len(post) >= 2:
         outstanding_orders = parse_decimal(post[0])
@@ -1469,15 +1510,19 @@ def load_prior_period_comments(xlsx_path: Path) -> dict[tuple[str, str], str]:
 # XLSX output writer
 # ---------------------------------------------------------------------------
 
-# Excel Accounting format -- matches the Jan26 reference file exactly.
-_ACCOUNTING_FMT = '_-"$"* #,##0_-;\\-"$"* #,##0_-;_-"$"* "-"??_-;_-@_-'
+# Excel Accounting format. Round 58 added [Red] colouring to the
+# negative branch so negative numbers (over-spends, deficits) print
+# in red and read at-a-glance as "below zero". The pre-R58 format
+# matched the Jan26 reference file exactly but was monochrome — a
+# council reader had to scan the leading minus to spot a deficit.
+# Format is 4 sections: positive ; negative ; zero ; text.
+_ACCOUNTING_FMT = '_-"$"* #,##0_-;[Red]\\-"$"* #,##0_-;_-"$"* "-"??_-;_-@_-'
 _PERCENT_FMT = "0.00"
 # Round 47 — proper percent format for the new Monthly shape's
 # % columns. Cells store the value as a fraction (0.398...) and
-# Excel renders it as "39.8%". The legacy ``_PERCENT_FMT`` above
-# treats stored 50 as "50.00" and is kept for the legacy Revenue /
-# Expense sheets.
-_PERCENT_AS_PERCENT_FMT = "0.0%"
+# Excel renders it as "39.8%". Round 58 added [Red] colouring to
+# the negative branch.
+_PERCENT_AS_PERCENT_FMT = "0.0%;[Red]-0.0%"
 _TITLE_FONT = Font(bold=True, size=14)
 # Green data bar colour -- matches Jan26 reference (#63C384 with full alpha).
 _DATA_BAR_COLOR = "FF63C384"
@@ -1518,7 +1563,7 @@ def _recompute_is_over(
     *,
     revenue_threshold: float | None = None,
     expense_threshold: float | None = None,
-    materiality_dollar: int = 5000,
+    materiality_dollar: int = 100,
 ) -> list[SubProgramLine]:
     """Return new SubProgramLine list with is_over + variance + materiality
     recomputed.
@@ -1695,7 +1740,7 @@ def _write_xlsx(
     over_budget_threshold: float = 101.0,
     *,
     include_combined: bool = False,
-    materiality_dollar: int = 5000,
+    materiality_dollar: int = 100,
     prior_ytd: dict[str, Decimal] | None = None,
     prior_funds: dict[str, Decimal] | None = None,
 ) -> None:
@@ -1759,7 +1804,7 @@ def _write_monthly_sub_program_sheet(
     ws: Any,
     lines: list[SubProgramLine],
     period_label: str,
-    materiality_dollar: int = 5000,
+    materiality_dollar: int = 100,
     *,
     prior_funds: dict[str, Decimal] | None = None,
     filter_to_non_ok: bool = False,
@@ -1794,10 +1839,11 @@ def _write_monthly_sub_program_sheet(
     in that case a comment carries the uncapped value for screen
     readers.
 
-    Rows where the Available Balance YTD is negative AND the magnitude
-    meets the dollar materiality floor get the pink ``_OVER_FILL``
-    (HL_MISMATCH) — the canonical "needs attention" indicator across
-    the toolkit.
+    Rows whose Status pill is non-OK get the pink ``_OVER_FILL``
+    (HL_MISMATCH) across all 13 cells — the canonical "needs
+    attention" indicator across the toolkit. Round 58 changed the
+    pink-fill condition from the raw ``available < 0`` signal to
+    ``status != "On track"`` so the fill never contradicts the pill.
 
     The "Funds from Previous Years" column is populated from the
     optional ``prior_funds`` dict (loaded via
@@ -2146,13 +2192,19 @@ def _write_monthly_sub_program_sheet(
         if prose_visual_lines > 1:
             ws.row_dimensions[row_idx].height = 15 * prose_visual_lines
 
-        # Pink fill on rows where Available Balance YTD is negative
-        # AND the magnitude meets the dollar materiality floor —
-        # mirrors the in-app row_style behaviour so a $50 over a $30
-        # budget doesn't paint pink in the printed copy. Round 47.
-        # Round 57: range(1, 14) paints cols 1..13 inclusive after
-        # Trend column dropped.
-        if available < 0 and abs(available) >= materiality_dollar:
+        # Round 58 — pink fill follows Status, not the raw Available
+        # Balance signal. Pre-R58 the fill fired on
+        # ``available < 0 and abs(available) >= materiality_dollar``
+        # which painted MANY On-track rows red: programs that spend at
+        # the expected rate but whose revenue arrives in lumps (parent
+        # payments at the start of term, government instalments) sit
+        # at ``available < 0`` for half the year while Status correctly
+        # reads "On track". After Round 56's pacing-free Status
+        # contract, the two signals diverged and the pink fill was
+        # contradicting the Status pill on the same row.
+        # Now: paint pink only when Status itself is non-OK. Cols 1..13
+        # (Trend column dropped in R57).
+        if status != _STATUS_ON_TRACK:
             for col_idx in range(1, 14):
                 ws.cell(row=row_idx, column=col_idx).fill = _OVER_FILL
 
@@ -2217,7 +2269,7 @@ def _write_watchlist_sheet(
     ws: Any,
     lines: list[SubProgramLine],
     period_label: str,
-    materiality_dollar: int = 5000,
+    materiality_dollar: int = 100,
     *,
     prior_funds: dict[str, Decimal] | None = None,
 ) -> None:
@@ -2353,7 +2405,7 @@ def generate_report(
     *,
     revenue_threshold: float | None = None,
     expense_threshold: float | None = None,
-    materiality_dollar: int = 5000,
+    materiality_dollar: int = 100,
 ) -> ReportSummary:
     """Orchestrate parse + comment join + optional XLSX write.
 

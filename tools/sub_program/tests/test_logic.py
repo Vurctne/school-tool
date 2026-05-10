@@ -123,6 +123,94 @@ class TestParseSamplePdf:
         for ln in lines:
             assert "total" not in ln.description.lower() or ln.sub_program.isdigit()
 
+    # Round 58 — column-shift bug regression tests. Pre-R58 the parser
+    # assumed pre[-1] was always YTD, but the GL21157 PDF omits the
+    # YTD column entirely when there's no spend (pct=0.00). This caused
+    # ~20% of typical school rows to misread Annual budget as YTD and
+    # Last-year budget as Annual budget. Pin the fix against future
+    # drift by spot-checking three canonical shapes against the sample
+    # PDF's known values.
+
+    def test_zero_spend_row_with_orders_parses_correctly(self, lines: list[SubProgramLine]) -> None:
+        """Round 58: 4016 Instrumental Music Expenditure has Annual
+        $220,000, no YTD spend, $181,818 outstanding orders. Pre-fix
+        the parser read budget=$243,450, ytd=$220,000 (off by one column).
+        """
+        match = next(
+            (
+                ln
+                for ln in lines
+                if ln.sub_program == "4016" and ln.account.startswith("Expenditure")
+            ),
+            None,
+        )
+        assert match is not None, "Sub-program 4016 Expenditure missing"
+        assert match.budget == Decimal("220000"), (
+            f"4016 Expenditure budget should be $220,000; got ${match.budget}"
+        )
+        assert match.ytd == Decimal("0"), (
+            f"4016 Expenditure YTD should be $0 (no spend yet); got ${match.ytd}"
+        )
+        assert match.outstanding_orders == Decimal("181818")
+
+    def test_zero_spend_row_without_orders_parses_correctly(
+        self, lines: list[SubProgramLine]
+    ) -> None:
+        """Round 58: 4010 Photography Expenditure has Annual $6,000,
+        no YTD spend, no orders. Pre-fix the parser read budget=$1,500
+        (last-year budget), ytd=$6,000 (annual budget)."""
+        match = next(
+            (
+                ln
+                for ln in lines
+                if ln.sub_program == "4010" and ln.account.startswith("Expenditure")
+            ),
+            None,
+        )
+        assert match is not None, "Sub-program 4010 Expenditure missing"
+        assert match.budget == Decimal("6000"), (
+            f"4010 Expenditure budget should be $6,000; got ${match.budget}"
+        )
+        assert match.ytd == Decimal("0")
+        assert match.outstanding_orders == Decimal("0")
+
+    def test_no_annual_budget_row_parses_with_zeros(self, lines: list[SubProgramLine]) -> None:
+        """Round 58: 4051 Dance Activities Expenditure has no current-year
+        allocation (no annual budget, no YTD, no orders) — only last-year
+        history. Pre-fix the parser read budget=$10,107 (last-year
+        actual), ytd=$10,205 (last-year budget)."""
+        match = next(
+            (
+                ln
+                for ln in lines
+                if ln.sub_program == "4051" and ln.account.startswith("Expenditure")
+            ),
+            None,
+        )
+        assert match is not None, "Sub-program 4051 Expenditure missing"
+        assert match.budget == Decimal("0"), (
+            f"4051 Expenditure budget should be $0 (no current allocation); got ${match.budget}"
+        )
+        assert match.ytd == Decimal("0")
+        assert match.last_year_budget == Decimal("10205")
+        assert match.last_year_actual == Decimal("10107")
+
+    def test_unbudgeted_spend_row_parses_correctly(self, lines: list[SubProgramLine]) -> None:
+        """Round 58 regression: ensure the existing single-pre-token
+        unbudgeted-spend case still works. 8505 School Saving Bonus
+        has $255,751 spend with no budget allocation."""
+        match = next(
+            (
+                ln
+                for ln in lines
+                if ln.sub_program == "8505" and ln.account.startswith("Expenditure")
+            ),
+            None,
+        )
+        assert match is not None, "Sub-program 8505 Expenditure missing"
+        assert match.budget == Decimal("0")
+        assert match.ytd == Decimal("255751")
+
 
 # ---------------------------------------------------------------------------
 # Test: over-budget detection
@@ -2211,19 +2299,36 @@ class TestF1Round1Fixes:
         assert outlook_back == ""
         assert action_back == ""
 
-    def test_status_pill_boundary_overrun_exactly_5000(self) -> None:
-        """Round 56 boundary pin: with default 101% threshold, $5,000
-        overrun on a $50K budget = 110% used = $4,500 past threshold.
-        That is below the $5K materiality dollar floor AND pct_over is
-        only 9 pp → falls back to On track via the materiality clause."""
+    def test_status_pill_materiality_floor_with_explicit_5k(self) -> None:
+        """Round 58: with the function-level default lowered to $100,
+        the materiality floor only kicks in when the user / caller
+        explicitly raises it. Pin the floor's behaviour with an
+        explicit $5K — $4.5K past threshold falls back to On track via
+        the materiality + pct_over clause (9 pp ≤ 50)."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
                 annual_exp_budget=Decimal("50000"),
                 exp_ytd=Decimal("55000"),  # $4.5K past 101% threshold
+                materiality_dollar=5000,
             )
             == "On track"
+        )
+
+    def test_status_pill_default_materiality_100_does_not_suppress_4k(self) -> None:
+        """Round 58 follow-on: with the new $100 default materiality,
+        the same $4.5K overrun is no longer suppressed — it lands in
+        Slightly over (the $25K Material dollar floor + 25% percent
+        floor still gate the higher buckets)."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                annual_exp_budget=Decimal("50000"),
+                exp_ytd=Decimal("55000"),
+            )
+            == "Slightly over"
         )
 
     def test_status_pill_boundary_overrun_exactly_25000(self) -> None:
