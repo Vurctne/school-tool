@@ -234,6 +234,80 @@ class TestParseSamplePdf:
         assert match.last_year_actual == Decimal("255751")
 
 
+class TestPositionalParserSpotChecks:
+    """Round 61 — positional parser regression suite.
+
+    Pin the parser's output for ~15 representative sub-program rows
+    against the values transcribed directly from the sample PDF
+    (Samples/Annual Subprogram Budget Report/GL21157_Annual Subprogram
+    budget report.pdf, dated 3 March 2026). Pre-R61 the parser used
+    pct-based heuristics that misread roughly 20% of rows whenever a
+    column was blank. The positional parser reads each column from
+    fixed x-coordinates derived from the PDF header, so blank columns
+    correctly produce zero rather than shifting the column window.
+    """
+
+    @pytest.fixture(scope="class")
+    def lines_by_key(self) -> dict[tuple[str, str], SubProgramLine]:
+        lines = parse_sub_program_pdf(_SAMPLE_PDF)
+        return {(ln.sub_program, ln.account): ln for ln in lines}
+
+    @pytest.mark.parametrize(
+        "sub_prog,account,budget,ytd,orders",
+        [
+            # (sub_prog, account, expected_budget, expected_ytd, expected_orders)
+            # Standard: all columns present.
+            ("4001", "Expenditure", 52450, 8241, 489),
+            ("8328", "Expenditure", 360500, 30931, 0),
+            ("8328", "Revenue", 360500, 112300, 0),
+            # Zero YTD (blank YTD column in PDF, pct=0.00).
+            ("4010", "Expenditure", 6000, 0, 0),
+            ("4016", "Expenditure", 220000, 0, 181818),
+            ("8851", "Expenditure", 31160, 0, 0),
+            ("8756", "Expenditure", 50700, 0, 0),
+            # No annual budget shown (LY history only on Expenditure side).
+            ("4051", "Expenditure", 0, 0, 0),
+            ("4290", "Expenditure", 0, 0, 0),
+            ("8401", "Expenditure", 0, 0, 0),
+            # Last-year-only row (1 pre-token + 0 post). Must NOT
+            # interpret the lone $255,751 as YTD.
+            ("8505", "Expenditure", 0, 0, 0),
+            ("8505", "Revenue", 0, 0, 0),
+            # Unbudgeted current spend (1 pre-token + 1 post).
+            ("8650", "Expenditure", 0, 26924, 0),
+            # Standard Revenue rows.
+            ("5450", "Revenue", 23500, 0, 0),
+            ("6001", "Revenue", 120, 12, 0),
+            ("7001", "Revenue", 26000, 24389, 0),
+            ("8851", "Revenue", 31160, 33326, 0),
+            # Expenditure with both YTD and orders shown.
+            ("7001", "Expenditure", 581700, 120373, 1686887),
+            ("6201", "Expenditure", 221000, 46041, 18515),
+            ("4101", "Expenditure", 23125, 279, 0),
+        ],
+    )
+    def test_pdf_row_matches_expected(
+        self,
+        lines_by_key: dict[tuple[str, str], SubProgramLine],
+        sub_prog: str,
+        account: str,
+        budget: int,
+        ytd: int,
+        orders: int,
+    ) -> None:
+        line = lines_by_key.get((sub_prog, account))
+        assert line is not None, f"{sub_prog} {account} missing from parsed output"
+        assert line.budget == Decimal(budget), (
+            f"{sub_prog} {account} budget: expected ${budget}, got ${line.budget}"
+        )
+        assert line.ytd == Decimal(ytd), (
+            f"{sub_prog} {account} YTD: expected ${ytd}, got ${line.ytd}"
+        )
+        assert line.outstanding_orders == Decimal(orders), (
+            f"{sub_prog} {account} orders: expected ${orders}, got ${line.outstanding_orders}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Test: over-budget detection
 # ---------------------------------------------------------------------------

@@ -5,6 +5,27 @@ is at the top.
 
 ---
 
+## v2.4.17.0 — May 2026
+
+* **Sub-Program Budget Report — parser rewritten to use positional
+  column extraction.** The CASES21 GL21157 PDF right-aligns every
+  numeric column to a fixed x position derived from the column
+  header. Previous rounds (R59/R60) tried to disambiguate columns by
+  the percent value (`pct == 0` triggered "YTD column omitted"),
+  which worked for many cases but was fundamentally a guess. The
+  new parser reads the page's column header positions via
+  pdfplumber's `extract_words()` and bins each numeric token to the
+  column whose right edge x1 is closest. Blank columns simply
+  produce no token at that position — which the binning correctly
+  reads as "field absent → defaults to zero". 20 spot-check rows
+  from the sample PDF (Revenue + Expenditure, with combinations of
+  blank YTD, blank orders, blank annual budget, last-year-only)
+  pinned in a parametrized regression test. The pre-R61 heuristic
+  helpers (`_parse_text_lines`, `_build_line`,
+  `_parse_numeric_tokens_from_parts`) deleted.
+
+---
+
 ## v2.4.16.0 — May 2026
 
 * **Sub-Program Budget Report — XLSX Watchlist now matches in-app

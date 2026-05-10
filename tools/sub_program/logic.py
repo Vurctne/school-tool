@@ -954,219 +954,11 @@ _SKIP_RE = re.compile(
 _NUM_PART_RE = re.compile(r"^[\-\$]?[\d,]+(\.\d+)?$|^\([\d,]+(\.\d+)?\)$")
 
 
-def _parse_numeric_tokens_from_parts(parts: list[str]) -> list[str]:
-    """Filter *parts* to only those that look like numeric tokens."""
-    return [p for p in parts if _NUM_PART_RE.match(p)]
-
-
-def _build_line(
-    sub_prog: str,
-    title: str,
-    tokens: list[str],
-    section: str,
-) -> SubProgramLine:
-    """Build a SubProgramLine from the numeric tokens on a data row.
-
-    Revenue rows:
-        Last year actual | Last year budget | Annual budget | YTD | % Budget received
-    Expenditure rows:
-        Last year actual | Last year budget | Annual budget | YTD | % | Outstanding | Uncommitted
-
-    Column layout varies: the GL21157 PDF omits zero-valued columns
-    rather than showing them as 0. The most common omission is the
-    YTD column when there has been no spend this year — the row then
-    shows ``... Annual_budget 0.00 [Orders] [Uncommitted]`` instead
-    of ``... Annual_budget YTD 0.00 [Orders] [Uncommitted]``.
-
-    Round 58 fix
-    ------------
-    Pre-R58 the parser assumed ``pre[-1]`` was always YTD and
-    ``pre[-2]`` was always Annual budget. For the (very common!)
-    zero-spend rows that misread Annual budget as YTD and Last-year
-    budget as Annual budget, producing wrong Status pills and
-    wrong totals across ~20% of typical school budgets. The new
-    rule uses the percent value as a disambiguator:
-
-    * ``pct > 0``: YTD is shown. Standard parse —
-      ``ytd = pre[-1]``, ``budget = pre[-2]``.
-    * ``pct == 0`` AND ``post`` is non-empty: YTD is omitted; the
-      Annual budget shifts right one position. ``ytd = 0``,
-      ``budget = pre[-1]``, last-year columns shift left by 1.
-    * ``pct == 0`` AND ``post`` is empty AND ``len(pre) >= 2``: no
-      Annual budget shown either (program discontinued / no current
-      allocation). ``budget = 0, ytd = 0``; the 2 pre tokens are
-      Last-year columns.
-    * ``pct == 0`` AND ``post`` is empty AND ``len(pre) == 1``:
-      unbudgeted spend (e.g. School Saving Bonus). ``ytd = pre[0]``,
-      ``budget = 0``.
-
-    Outstanding orders (Expenditure only): the first token after %
-    when len(post) >= 2 (the second token is the Uncommitted Balance,
-    derived). When len(post) == 1 only Uncommitted is shown and
-    Orders is zero.
-    """
-    pct = Decimal("0")
-    budget = Decimal("0")
-    ytd = Decimal("0")
-    last_year_actual = Decimal("0")
-    last_year_budget = Decimal("0")
-    outstanding_orders = Decimal("0")
-
-    if not tokens:
-        remaining = budget - ytd
-        faculty = _infer_faculty(sub_prog)
-        is_over = ytd > budget if budget != 0 else False
-        return SubProgramLine(
-            sub_program=sub_prog,
-            account=section,
-            description=title.strip(),
-            budget=budget,
-            ytd=ytd,
-            remaining=remaining,
-            used_pct=pct,
-            faculty=faculty,
-            is_over=is_over,
-        )
-
-    # Locate % token: scan right-to-left for a value with a dot and value <= 9999
-    pct_idx: int | None = None
-    for idx in range(len(tokens) - 1, -1, -1):
-        raw = tokens[idx].replace(",", "")
-        if "." in raw:
-            try:
-                v = Decimal(raw)
-                if Decimal("0") <= v <= Decimal("9999"):
-                    pct_idx = idx
-                    break
-            except InvalidOperation:
-                pass
-
-    if pct_idx is not None:
-        pct = parse_decimal(tokens[pct_idx])
-        pre = tokens[:pct_idx]
-        post = tokens[pct_idx + 1 :]
-    else:
-        pre = tokens
-        post = []
-
-    # Round 58 — disambiguate by the pct value. See docstring above.
-    if pct == 0 and len(pre) >= 2 and not post:
-        # Case: no Annual budget shown (post empty). The 2+ pre tokens
-        # are Last-year columns; Annual budget and YTD are both blank.
-        # Examples: 4051 Dance Activities, 4290 Sports Programs, 8401
-        # Excursions (programs with no current-year allocation).
-        budget = Decimal("0")
-        ytd = Decimal("0")
-        last_year_budget = parse_decimal(pre[-1])
-        if len(pre) >= 2:
-            last_year_actual = parse_decimal(pre[-2])
-    elif pct == 0 and len(pre) >= 2:
-        # Case: YTD column omitted (zero spend) but Annual budget
-        # present. pre[-1] is Annual budget, NOT YTD. Last-year
-        # columns shift left by one.
-        # Examples: 4010 Photography, 4016 Instrumental Music, 8851
-        # Magazine — programs that have not yet spent this year.
-        ytd = Decimal("0")
-        budget = parse_decimal(pre[-1])
-        if len(pre) >= 2:
-            last_year_budget = parse_decimal(pre[-2])
-        if len(pre) >= 3:
-            last_year_actual = parse_decimal(pre[-3])
-    elif len(pre) >= 2:
-        # Standard parse: pct > 0 implies YTD is shown.
-        ytd = parse_decimal(pre[-1])
-        budget = parse_decimal(pre[-2])
-        if len(pre) >= 3:
-            last_year_budget = parse_decimal(pre[-3])
-        if len(pre) >= 4:
-            last_year_actual = parse_decimal(pre[-4])
-    elif len(pre) == 1:
-        # Round 60 — distinguish two single-pre-token shapes:
-        #   (a) unbudgeted spend (1 pre + ≥1 post): the post token
-        #       is the negative Available Balance produced by the
-        #       spend. The pre token IS the YTD (e.g. 8650 Rowing
-        #       Program "(See 8599)" with $26,924 spent against $0
-        #       budget, post=[-26,924]).
-        #   (b) last-year history only (1 pre + 0 post): no current-
-        #       year activity at all. The pre token is LY_actual
-        #       (e.g. 8505 School Saving Bonus with $255,751 from
-        #       last year and no current-year revenue/expense). The
-        #       PDF only shows LY_actual + 0.00% — KMAR reference
-        #       confirms budget=0, YTD=0 for these.
-        if post:
-            # Case (a): unbudgeted spend.
-            ytd = parse_decimal(pre[-1])
-            budget = Decimal("0")
-        else:
-            # Case (b): LY_actual only; no current-year activity.
-            last_year_actual = parse_decimal(pre[-1])
-            # ytd, budget, last_year_budget all stay 0 (defaults).
-    # else: empty pre — both remain 0 (degenerate row, leave defaults)
-
-    # Outstanding orders: only meaningful for Expenditure rows.
-    # When present it is the FIRST token after %; the second (if any) is
-    # Uncommitted Balance (derived, not stored). When outstanding is zero the
-    # PDF omits it entirely, leaving only Uncommitted Balance in post.
-    if section == "Expenditure" and len(post) >= 2:
-        outstanding_orders = parse_decimal(post[0])
-
-    remaining = budget - ytd
-    faculty = _infer_faculty(sub_prog)
-    is_over = bool(ytd > budget) if budget != Decimal("0") else False
-
-    return SubProgramLine(
-        sub_program=sub_prog,
-        account=section,
-        description=title.strip(),
-        budget=budget,
-        ytd=ytd,
-        remaining=remaining,
-        used_pct=pct,
-        faculty=faculty,
-        is_over=is_over,
-        last_year_actual=last_year_actual,
-        last_year_budget=last_year_budget,
-        outstanding_orders=outstanding_orders,
-    )
-
-
-def _parse_text_lines(text: str, section: str) -> list[SubProgramLine]:
-    """Parse data rows from a page's extracted text given its current section."""
-    results: list[SubProgramLine] = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if _SKIP_RE.match(line):
-            continue
-
-        # Data row must start with a 4-digit sub-program code
-        m = re.match(r"^(\d{4})\s+(.*)", line)
-        if not m:
-            continue
-
-        sub_prog = m.group(1)
-        rest = m.group(2).strip()
-
-        # Split title from numerics using whitespace-delimited tokens.
-        # Scan left-to-right; first part that looks like a standalone number
-        # marks the boundary between title text and numeric columns.
-        parts = rest.split()
-        title_parts: list[str] = []
-        numeric_start_idx = len(parts)
-        for pi, part in enumerate(parts):
-            if _NUM_PART_RE.match(part):
-                numeric_start_idx = pi
-                break
-            title_parts.append(part)
-
-        title = " ".join(title_parts)
-        numeric_parts = parts[numeric_start_idx:]
-        tokens = _parse_numeric_tokens_from_parts(numeric_parts)
-
-        results.append(_build_line(sub_prog, title, tokens, section))
-
-    return results
+# Round 61 — _parse_numeric_tokens_from_parts, _build_line, and
+# _parse_text_lines (the heuristic token-list parser) deleted along
+# with all pct-based column disambiguation. Replaced by
+# _parse_page_positionally below, which uses pdfplumber x-coordinates
+# to bin numeric tokens to fixed column right edges.
 
 
 # Regex to extract the print-date footer: "3 March 2026 13:37 1 [GL21157]"
@@ -1221,15 +1013,304 @@ def parse_sub_program_pdf_with_period(pdf_path: Path) -> tuple[list[SubProgramLi
     return _parse_sub_program_pdf_internal(pdf_path)
 
 
+def _group_words_by_row(
+    words: list[dict[str, Any]], tolerance: float = 2.0
+) -> list[list[dict[str, Any]]]:
+    """Group pdfplumber word dicts into rows by their ``top`` coordinate.
+
+    Words within ``tolerance`` pixels of each other vertically are
+    treated as belonging to the same row. Returns rows sorted top-to-
+    bottom; within each row, words are sorted left-to-right by ``x0``.
+    """
+    if not words:
+        return []
+    sorted_words = sorted(words, key=lambda w: (float(w["top"]), float(w["x0"])))
+    rows: list[list[dict[str, Any]]] = []
+    current_row: list[dict[str, Any]] = []
+    current_top: float | None = None
+    for w in sorted_words:
+        wtop = float(w["top"])
+        if current_top is None or abs(wtop - current_top) <= tolerance:
+            current_row.append(w)
+            if current_top is None:
+                current_top = wtop
+        else:
+            rows.append(sorted(current_row, key=lambda x: float(x["x0"])))
+            current_row = [w]
+            current_top = wtop
+    if current_row:
+        rows.append(sorted(current_row, key=lambda x: float(x["x0"])))
+    return rows
+
+
+# Round 61 — column right-edge derivation from the GL21157 PDF header.
+# Numbers in the data rows are right-aligned to fixed x positions
+# matching these headers, so we bin tokens to columns by x1 (right
+# edge) within a small tolerance. Pre-R61 the parser used pct-based
+# heuristics to disambiguate which token was which column; this
+# repeatedly broke on rows where a column was blank (e.g. zero YTD,
+# zero orders) because the heuristic shifted the column window. The
+# CASES21 export is generated with consistent layout, so positional
+# extraction is the bullet-proof read.
+
+# Each column has a unique, distinctive RIGHTMOST word in its header
+# label whose x1 marks where data values right-align. We find that
+# word directly; clustering / fuzzy joins were tried first but the
+# inter-label gap between "Orders" and "Uncommitted" headers in the
+# GL21157 layout is only ~9 px which is too small for a generic
+# whitespace-cluster to split safely.
+#
+# Mapping rule per column key:
+#   ly_actual     — word "actual" (only appears once, in "Last year actual")
+#   ly_budget     — first "budget" word reading left-to-right
+#   annual_budget — second "budget" word
+#   ytd           — word "YTD"
+#   pct           — last word in the percent column header
+#                   ("Expended" for Expenditure pages, "received" for
+#                   Revenue pages — both end with "ed", so we take the
+#                   word immediately to the right of "Budget" that's
+#                   not "budget" itself)
+#   orders        — word "Orders"
+#   uncommitted   — word "Balance" (right side of "Uncommitted Balance")
+
+
+def _detect_column_edges(
+    header_row: list[dict[str, Any]],
+) -> dict[str, float]:
+    """Build {column_key → right edge x1} from a header row.
+
+    Round 61 — direct word-match approach. The GL21157 header layout
+    has a 9-px gap between "Orders" and "Uncommitted" which trips
+    every reasonable whitespace-cluster threshold, so we instead pick
+    the distinctive word at each column's right edge.
+    """
+    if not header_row:
+        return {}
+    edges: dict[str, float] = {}
+    sorted_row = sorted(header_row, key=lambda w: float(w["x0"]))
+
+    # ly_actual — "actual" only appears in this column.
+    for w in sorted_row:
+        if w["text"].lower() == "actual":
+            edges["ly_actual"] = float(w["x1"])
+            break
+
+    # ly_budget / annual_budget — the two "budget" words in left-to-
+    # right order. (Header text: "Last year actual | Last year budget |
+    # Annual budget | YTD ...".)
+    budget_words = [w for w in sorted_row if w["text"].lower() == "budget"]
+    if len(budget_words) >= 1:
+        edges["ly_budget"] = float(budget_words[0]["x1"])
+    if len(budget_words) >= 2:
+        edges["annual_budget"] = float(budget_words[1]["x1"])
+
+    # ytd — word "YTD".
+    for w in sorted_row:
+        if w["text"].upper() == "YTD":
+            edges["ytd"] = float(w["x1"])
+            break
+
+    # pct — rightmost word of the percent column. The label is either
+    # "% Budget Expended" (Expenditure page) or "% Budget received"
+    # (Revenue page). Pick the rightmost word that comes AFTER the
+    # second "Budget" word but BEFORE "Outstanding" (if present).
+    pct_anchor_x = edges.get("annual_budget", 0.0) + 1.0 if "annual_budget" in edges else 0.0
+    orders_word = next(
+        (w for w in sorted_row if w["text"].lower() == "outstanding"),
+        None,
+    )
+    pct_right_bound = float(orders_word["x0"]) if orders_word is not None else 1e9
+    pct_label_words = [w for w in sorted_row if pct_anchor_x < float(w["x0"]) < pct_right_bound]
+    if pct_label_words:
+        edges["pct"] = max(float(w["x1"]) for w in pct_label_words)
+
+    # orders — word "Orders" (Expenditure page only).
+    for w in sorted_row:
+        if w["text"].lower() == "orders":
+            edges["orders"] = float(w["x1"])
+            break
+
+    # uncommitted — word "Balance" at the right edge of the page.
+    for w in sorted_row:
+        if w["text"].lower() == "balance":
+            edges["uncommitted"] = float(w["x1"])
+            break
+
+    # sub_prog — "Prog." word ends the sub-program header.
+    for w in sorted_row:
+        if w["text"].lower() == "prog.":
+            edges["sub_prog"] = float(w["x1"])
+            break
+
+    # title — "Title" word marks the title column's left edge (used
+    # downstream to filter out non-title text).
+    for w in sorted_row:
+        if w["text"].lower() == "title":
+            edges["title"] = float(w["x1"])
+            break
+
+    return edges
+
+
+def _is_numeric_word(text: str) -> bool:
+    """Cheap check: does this word look like a numeric value?"""
+    return bool(_NUM_PART_RE.match(text))
+
+
+def _parse_page_positionally(page: Any, section: str) -> list[SubProgramLine]:
+    """Parse data rows from one PDF page using x-coordinate column binning.
+
+    Round 61 — replaces the pre-R60 token-list heuristic that guessed
+    column identity from the percent value. CASES21 GL21157 right-aligns
+    each numeric column to a fixed x position; we read those positions
+    from the page's column-header row and bin every numeric token into
+    the column whose right edge is closest. Blank columns (zero YTD,
+    no outstanding orders, no annual budget at all) simply produce no
+    token at that x position, which the binning correctly reads as
+    "field absent → defaults to zero".
+    """
+    words = page.extract_words(use_text_flow=False, keep_blank_chars=False)
+    if not words:
+        return []
+
+    rows = _group_words_by_row(words)
+    if not rows:
+        return []
+
+    # Find the column-header row: the row whose joined text contains
+    # both "Sub Prog" and "Title". There may be a section banner row
+    # ("Revenue Recurrent and Capital" / "Expenditure Recurrent and
+    # Capital") above it; we skip past banner / report-title rows.
+    header_row: list[dict[str, Any]] | None = None
+    header_idx = -1
+    for idx, row in enumerate(rows):
+        joined = " ".join(w["text"] for w in row).lower()
+        if "sub prog" in joined and "title" in joined and "actual" in joined:
+            header_row = row
+            header_idx = idx
+            break
+
+    if not header_row:
+        return []
+
+    column_edges = _detect_column_edges(header_row)
+    # Required edges for any data row to make sense.
+    if "sub_prog" not in column_edges or "annual_budget" not in column_edges:
+        return []
+
+    results: list[SubProgramLine] = []
+    tolerance = 6.0  # px tolerance for token-to-column binning
+
+    # Title left edge: x0 of the title-column header.
+    title_x0_edge = next(
+        (float(w["x0"]) for w in header_row if w["text"].lower() == "title"),
+        column_edges.get("sub_prog", 50.0) + 20.0,
+    )
+
+    for row in rows[header_idx + 1 :]:
+        if not row:
+            continue
+        # Skip footer (page number + GL21157 marker) and totals rows.
+        text = " ".join(w["text"] for w in row).strip()
+        if _SKIP_RE.match(text):
+            continue
+        # First word must be a 4-digit sub-program code (right-aligned
+        # to sub_prog column). Anything else (page footer, blank line)
+        # is dropped.
+        first = row[0]
+        sub_prog = first["text"].strip()
+        if not (len(sub_prog) == 4 and sub_prog.isdigit()):
+            continue
+
+        # Title: all words after sub_prog whose x1 falls before the
+        # last-year-actual column's right edge minus tolerance.
+        ly_actual_edge = column_edges.get("ly_actual", 0.0)
+        title_words: list[str] = []
+        numeric_words: list[dict[str, Any]] = []
+        for w in row[1:]:
+            wx1 = float(w["x1"])
+            wtext = w["text"]
+            if wx1 <= ly_actual_edge - tolerance:
+                # Title territory.
+                if float(w["x0"]) >= title_x0_edge - tolerance:
+                    title_words.append(wtext)
+                continue
+            if _is_numeric_word(wtext):
+                numeric_words.append(w)
+            # Non-numeric words past the title column are ignored
+            # (defensive — shouldn't occur in well-formed CASES21
+            # exports).
+
+        title = " ".join(title_words).strip()
+
+        # Bin numeric words into columns by x1 proximity.
+        fields: dict[str, Decimal] = {}
+        for w in numeric_words:
+            wx1 = float(w["x1"])
+            wtext = w["text"]
+            best_col: str | None = None
+            best_dist = tolerance + 1.0
+            for col_key, edge in column_edges.items():
+                if col_key in ("sub_prog", "title"):
+                    continue
+                d = abs(wx1 - edge)
+                if d < best_dist:
+                    best_dist = d
+                    best_col = col_key
+            if best_col is None:
+                continue
+            try:
+                fields[best_col] = parse_decimal(wtext)
+            except (ValueError, InvalidOperation):
+                continue
+
+        budget = fields.get("annual_budget", Decimal("0"))
+        ytd = fields.get("ytd", Decimal("0"))
+        last_year_actual = fields.get("ly_actual", Decimal("0"))
+        last_year_budget = fields.get("ly_budget", Decimal("0"))
+        outstanding_orders = (
+            fields.get("orders", Decimal("0")) if section == "Expenditure" else Decimal("0")
+        )
+        used_pct = fields.get("pct", Decimal("0"))
+
+        remaining = budget - ytd
+        faculty = _infer_faculty(sub_prog)
+        is_over = bool(ytd > budget) if budget != Decimal("0") else False
+
+        results.append(
+            SubProgramLine(
+                sub_program=sub_prog,
+                account=section,
+                description=title,
+                budget=budget,
+                ytd=ytd,
+                remaining=remaining,
+                used_pct=used_pct,
+                faculty=faculty,
+                is_over=is_over,
+                last_year_actual=last_year_actual,
+                last_year_budget=last_year_budget,
+                outstanding_orders=outstanding_orders,
+            )
+        )
+
+    return results
+
+
 def _parse_sub_program_pdf_internal(
     pdf_path: Path,
 ) -> tuple[list[SubProgramLine], str]:
-    """Internal implementation shared by the two public PDF parsers."""
+    """Internal implementation shared by the two public PDF parsers.
+
+    Round 61 — switched from token-list heuristics to positional
+    column binning (see :func:`_parse_page_positionally`). Each page
+    is processed independently; the section (Revenue / Expenditure)
+    is detected from the page's banner row.
+    """
     if not pdf_path.exists():
         raise ValueError(f"File not found: {pdf_path}")
 
     lines: list[SubProgramLine] = []
-    section = "Revenue"  # default; updated per-page
     period_label = ""
 
     try:
@@ -1240,32 +1321,22 @@ def _parse_sub_program_pdf_internal(
                     "check the file is a CASES21 GL21157 export"
                 )
 
+            section = "Revenue"  # default; updated per-page
             for page in pdf.pages:
-                # Try tables first; fall back to text
-                tables = page.extract_tables()
-                if tables:
-                    for table in tables:
-                        for row in table:
-                            if row and row[0]:
-                                cell0 = str(row[0]).strip()
-                                if _REVENUE_HDR.search(cell0):
-                                    section = "Revenue"
-                                elif _EXPENDITURE_HDR.search(cell0):
-                                    section = "Expenditure"
-                else:
-                    text = page.extract_text() or ""
-                    # Update section from page headers
-                    if _REVENUE_HDR.search(text):
-                        section = "Revenue"
-                    if _EXPENDITURE_HDR.search(text):
-                        section = "Expenditure"
+                text = page.extract_text() or ""
+                # Section banner is a row that says "Revenue Recurrent
+                # and Capital" or "Expenditure Recurrent and Capital".
+                if _REVENUE_HDR.search(text):
+                    section = "Revenue"
+                if _EXPENDITURE_HDR.search(text):
+                    section = "Expenditure"
 
-                    # Extract period label from footer (first match wins).
-                    if not period_label:
-                        period_label = _extract_period_label(text)
+                # Extract period label from footer (first match wins).
+                if not period_label:
+                    period_label = _extract_period_label(text)
 
-                    page_lines = _parse_text_lines(text, section)
-                    lines.extend(page_lines)
+                page_lines = _parse_page_positionally(page, section)
+                lines.extend(page_lines)
 
     except OSError as exc:
         raise ValueError(
