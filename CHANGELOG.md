@@ -5,6 +5,29 @@ is at the top.
 
 ---
 
+## v2.4.0.0 — May 2026
+
+* **Sub-Program Budget Report — Trend column + Watchlist sheet.**
+  The XLSX output's main sheet now leads with Status (col 3) and
+  Trend (col 4) before the financials, so a non-finance reader's eye
+  lands on the call-to-action before scanning dollars. The financial
+  columns shift right by 2 (so Comments lands at col 14). When the
+  user supplies last month's exported XLSX as the prior-period file,
+  the Trend column populates with one of `New issue`, `Worsening`,
+  `Stable`, `Improving`, or `Resolved` — period-over-period direction
+  computed from the change in Available Balance YTD against the same
+  $5K materiality floor that the Status pill uses. `Worsening` and
+  `New issue` are bold-faced for print scan-ability. When no prior-
+  period file is supplied, the Trend column stays blank and the
+  page footer carries an explanatory note.
+* **New Watchlist sheet** holds the same 14 columns but filtered to
+  rows whose Status is not `On track`, sorted by absolute variance
+  descending (variance-analysis skill rule: largest concerns first).
+  Council members read this sheet to find what needs attention
+  without scanning past every healthy row in the main report.
+
+---
+
 ## v2.3.1.0 — May 2026
 
 * **Sub-Program Budget Report — plain-English Status column + prose

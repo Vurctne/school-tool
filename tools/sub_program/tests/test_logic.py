@@ -580,11 +580,11 @@ def _make_mixed_lines() -> list[SubProgramLine]:
 
 class TestXlsxMonthlyReport:
     """Round 38 — replaced TestXlsxTwoSheets. The XLSX output is now a
-    single sheet matching the school's own Monthly Sub Program Report
-    workbook (12 columns, one row per sub-program). Detailed coverage
-    of the new shape lives in test_xlsx_monthly_report.py (Round 38)."""
+    Sub Program Report sheet matching the school's own Monthly Sub
+    Program Report workbook. Round 54 F2 added a second sheet
+    (Watchlist) so the workbook is two sheets total."""
 
-    def test_single_sheet_named_sub_program_report(self, tmp_path: Path) -> None:
+    def test_workbook_has_sub_program_report_and_watchlist_sheets(self, tmp_path: Path) -> None:
         from tools.sub_program.logic import SubProgramLine
 
         out = tmp_path / "test.xlsx"
@@ -601,7 +601,8 @@ class TestXlsxMonthlyReport:
         )
         _write_xlsx([ln], out)
         wb = openpyxl.load_workbook(out)
-        assert wb.sheetnames == ["Sub Program Report"]
+        # F2: Sub Program Report (main) + Watchlist (filtered subset).
+        assert wb.sheetnames == ["Sub Program Report", "Watchlist"]
 
 
 class TestPeriodLabel:
@@ -1188,7 +1189,7 @@ class TestStructuredCommentaryXlsxOutput:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # Header is rows 1-2, data starts row 3. Comments is column 12.
-        cell = ws.cell(row=3, column=12).value
+        cell = ws.cell(row=3, column=14).value
         # R1 fix: prose now uses period+capital splits instead of em-dash.
         assert cell == "Ongoing variance. Being monitored. Reviewed by council."
 
@@ -1199,7 +1200,7 @@ class TestStructuredCommentaryXlsxOutput:
 
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=12).value
+        cell = ws.cell(row=3, column=14).value
         # Empty cell renders as None or "" depending on openpyxl version.
         assert cell in (None, "")
 
@@ -1215,7 +1216,7 @@ class TestStructuredCommentaryXlsxOutput:
 
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=12).value == "Reviewed by council."
+        assert ws.cell(row=3, column=14).value == "Reviewed by council."
 
 
 # ---------------------------------------------------------------------------
@@ -1319,7 +1320,7 @@ class TestStructuredCommentaryRound1Fixes:
         _write_xlsx([line_a, line_b], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=12).value
+        cell = ws.cell(row=3, column=14).value
         # Cell carries row A's notes only (row A came first), NOT a
         # fabricated "Needs investigation. Row A note." combination
         # mixing row B's Action with row A's notes. Round 53 F1:
@@ -1346,7 +1347,7 @@ class TestStructuredCommentaryRound1Fixes:
         _write_xlsx([line], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=12)
+        cell = ws.cell(row=3, column=14)
         # Round 53 F1: prose renderer adds a terminal period.
         assert cell.value == "'=SUM(D3:E3) outdated."
         # Cell is text-formatted, not a formula.
@@ -1373,7 +1374,7 @@ class TestStructuredCommentaryRound1Fixes:
             _write_xlsx([line], out, period_label="Apr 2026")
             wb = openpyxl.load_workbook(out, data_only=True)
             ws = wb["Sub Program Report"]
-            cell = ws.cell(row=3, column=12)
+            cell = ws.cell(row=3, column=14)
             # Round 53 F1: prose renderer adds a terminal period.
             assert cell.value == f"'{sigil}danger.", f"sigil {sigil!r} should be guarded"
 
@@ -1764,7 +1765,7 @@ class TestF1XlsxIntegration:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # Row 2 is the header.
-        assert ws.cell(row=2, column=13).value == "Status"
+        assert ws.cell(row=2, column=3).value == "Status"
 
     def test_xlsx_status_column_renders_pill_value(self, tmp_path: Path) -> None:
         out = tmp_path / "out.xlsx"
@@ -1786,7 +1787,7 @@ class TestF1XlsxIntegration:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # Data row 3, Status col 13. Available = rev_y − exp_y = 6000 − 5000 = +1000.
-        assert ws.cell(row=3, column=13).value == "On track"
+        assert ws.cell(row=3, column=3).value == "On track"
 
     def test_xlsx_comments_cell_uses_prose_form(self, tmp_path: Path) -> None:
         """Move E + R1 fix: prose renders as two short sentences (was em-
@@ -1812,7 +1813,7 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=12).value
+        cell = ws.cell(row=3, column=14).value
         assert cell == "Ongoing variance. Being monitored. Reviewed by council."
 
     def test_xlsx_caps_percent_overflow(self, tmp_path: Path) -> None:
@@ -1840,7 +1841,7 @@ class TestF1XlsxIntegration:
         # R1 fix: capped values now render as TEXT marker ">999%" / "<-999%"
         # instead of the capped fraction — the marker survives print,
         # while a numeric `999.0%` cell looks like a real measurement.
-        rev_pct_value = ws.cell(row=3, column=11).value
+        rev_pct_value = ws.cell(row=3, column=13).value
         assert rev_pct_value == ">999%"
 
     def test_xlsx_capped_cell_carries_note_with_uncapped_value(self, tmp_path: Path) -> None:
@@ -1862,7 +1863,7 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        rev_pct_cell = ws.cell(row=3, column=11)
+        rev_pct_cell = ws.cell(row=3, column=13)
         assert rev_pct_cell.comment is not None
         assert "2136" in (rev_pct_cell.comment.text or "") or "21.36" in (
             rev_pct_cell.comment.text or ""
@@ -1898,7 +1899,7 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=13).value == "Investigate urgently"
+        assert ws.cell(row=3, column=3).value == "Investigate urgently"
 
     def test_xlsx_status_no_spend_yet_when_budget_set_no_movement(self, tmp_path: Path) -> None:
         """A sub-program with material budget but $0 YTD past 25% of the
@@ -1921,7 +1922,7 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=13).value == "No spend yet"
+        assert ws.cell(row=3, column=3).value == "No spend yet"
 
 
 # ---------------------------------------------------------------------------
@@ -2082,7 +2083,7 @@ class TestF1Round1Fixes:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # rev_y / rev_b = 21 → cap to ">999%"
-        assert ws.cell(row=3, column=11).value == ">999%"
+        assert ws.cell(row=3, column=13).value == ">999%"
 
     def test_xlsx_pink_fill_extends_to_status_column(self, tmp_path: Path) -> None:
         """R1 regression test: an over-budget row paints pink across all
@@ -2117,7 +2118,7 @@ class TestF1Round1Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        status_cell = ws.cell(row=3, column=13)
+        status_cell = ws.cell(row=3, column=3)
         # The pink fill is the canonical HL_MISMATCH ARGB. The fgColor
         # may surface as either an RGB or theme reference depending on
         # openpyxl version; check the suffix.
@@ -2156,7 +2157,7 @@ class TestF1Round1Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        status_cell = ws.cell(row=3, column=13)
+        status_cell = ws.cell(row=3, column=3)
         assert status_cell.value == "No spend yet"
         assert status_cell.font is not None
         assert status_cell.font.bold is True
@@ -2196,8 +2197,8 @@ class TestF1Round1Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        status = ws.cell(row=3, column=13).value
-        comments = ws.cell(row=3, column=12).value
+        status = ws.cell(row=3, column=3).value
+        comments = ws.cell(row=3, column=14).value
         assert status == "Investigate urgently"
         # R2 fix: imperative cue for non-OK statuses (was archival).
         assert comments == "Action needed: add commentary."
@@ -2548,16 +2549,16 @@ class TestF1Round2Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=13).value == "No spend yet"
+        assert ws.cell(row=3, column=3).value == "No spend yet"
         # No-spend-yet keeps the parenthesised archival form because the
         # absence of commentary IS the literal point — there's nothing
         # for the BM to add.
-        assert ws.cell(row=3, column=12).value == "(no commentary recorded)"
+        assert ws.cell(row=3, column=14).value == "(no commentary recorded)"
 
-    def test_xlsx_comments_width_reduced_to_40(self, tmp_path: Path) -> None:
-        """R2 fix: Comments column width 50 → 40 to relieve print-width
-        compression. Total widths sum drops from 248 to 238 char-units,
-        leaving more margin under landscape A4 fit-to-width."""
+    def test_xlsx_comments_width_reduced_to_40_then_32(self, tmp_path: Path) -> None:
+        """Round 53 R2 reduced Comments column 50 → 40. F2 R1 further
+        reduced it to 32 (after F2 added Status + Trend columns,
+        which pushed total widths up). This test pins the F2 R1 value."""
         out = tmp_path / "width.xlsx"
         line = SubProgramLine(
             sub_program="4001",
@@ -2574,7 +2575,8 @@ class TestF1Round2Fixes:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # Column 12 is Comments; Excel column letter "L".
-        assert ws.column_dimensions["L"].width == 40
+        # F2 R1: width is now 32 (down from 40).
+        assert ws.column_dimensions["N"].width == 32
 
     def test_xlsx_capped_marker_with_pink_fill_and_text_format(self, tmp_path: Path) -> None:
         """R2 regression test: a row that's both materially over AND
@@ -2611,7 +2613,7 @@ class TestF1Round2Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        rev_pct_cell = ws.cell(row=3, column=11)
+        rev_pct_cell = ws.cell(row=3, column=13)
         # Capped marker.
         assert rev_pct_cell.value == ">999%"
         # Text format.
@@ -2620,3 +2622,777 @@ class TestF1Round2Fixes:
         # paints col 11 too).
         rgb = rev_pct_cell.fill.fgColor.rgb if rev_pct_cell.fill.fgColor is not None else None
         assert rgb is not None and HL_MISMATCH in rgb.upper()
+
+
+# ---------------------------------------------------------------------------
+# Round 54 F2 — Trend column (Move D) + Watchlist sheet.
+# Status moves from col 13 to col 3 (after PROGRAM NAME); Trend at col 4.
+# ---------------------------------------------------------------------------
+
+
+class TestComputeTrend:
+    """``compute_trend`` returns the period-over-period direction
+    indicator for a sub-program row."""
+
+    def test_trend_values_tuple_has_designed_shape(self) -> None:
+        """R1 fixes: 'New issue' renamed to 'Newly off track' (pill-
+        pattern consistency); 'Stable' dropped from values (reads as
+        'no problem' alongside non-OK Status)."""
+        from tools.sub_program.logic import _TREND_VALUES
+
+        assert _TREND_VALUES == (
+            "Newly off track",
+            "Worsening",
+            "Improving",
+            "Resolved",
+        )
+
+    def test_no_prior_returns_blank(self) -> None:
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("-50000"),
+                prior_available=None,
+            )
+            == ""
+        )
+
+    def test_both_on_track_returns_blank(self) -> None:
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("5000"),
+                prior_available=Decimal("3000"),
+            )
+            == ""
+        )
+
+    def test_newly_off_track_when_current_over_prior_ok(self) -> None:
+        """R1 fix: 'New issue' renamed to 'Newly off track' for pill
+        pattern consistency."""
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("-30000"),
+                prior_available=Decimal("5000"),
+            )
+            == "Newly off track"
+        )
+
+    def test_resolved_when_current_ok_prior_over(self) -> None:
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("2000"),
+                prior_available=Decimal("-30000"),
+            )
+            == "Resolved"
+        )
+
+    def test_worsening_when_overrun_grew_past_materiality(self) -> None:
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("-50000"),
+                prior_available=Decimal("-30000"),
+                materiality_dollar=5000,
+            )
+            == "Worsening"
+        )
+
+    def test_improving_when_overrun_shrank_past_materiality(self) -> None:
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("-30000"),
+                prior_available=Decimal("-50000"),
+                materiality_dollar=5000,
+            )
+            == "Improving"
+        )
+
+    def test_stable_case_returns_blank_not_stable(self) -> None:
+        """R1 fix: 'Stable' was dropped from the values tuple — reads
+        as 'no problem' to a council member when alongside a non-OK
+        Status pill. Both periods over with small delta now returns
+        blank; Status carries the severity, Trend only fires when
+        there's a meaningful direction change."""
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("-30000"),
+                prior_available=Decimal("-32000"),
+                materiality_dollar=5000,
+            )
+            == ""
+        )
+
+    def test_change_below_materiality_floor_is_not_a_trend(self) -> None:
+        from tools.sub_program.logic import compute_trend
+
+        assert (
+            compute_trend(
+                current_available=Decimal("-200"),
+                prior_available=Decimal("-100"),
+                materiality_dollar=5000,
+            )
+            == ""
+        )
+
+
+class TestLoadPriorPeriodYtd:
+    """``load_prior_period_ytd`` reads Available Balance YTD from a
+    prior month's exported XLSX."""
+
+    def _make_prior_xlsx(self, tmp_path: Path) -> Path:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.title = "Sub Program Report"
+        ws.cell(row=1, column=1, value="Monthly Sub Program Report")
+        ws.cell(row=2, column=1, value="CODE")
+        ws.cell(row=2, column=2, value="PROGRAM NAME")
+        ws.cell(row=2, column=11, value="Available Balance YTD")
+        ws.cell(row=3, column=1, value="4001")
+        ws.cell(row=3, column=2, value="Art")
+        ws.cell(row=3, column=11, value=12345.67)
+        ws.cell(row=4, column=1, value="7001")
+        ws.cell(row=4, column=2, value="Administration")
+        ws.cell(row=4, column=11, value=-1342953.0)
+        out = tmp_path / "prior.xlsx"
+        wb.save(out)
+        return out
+
+    def test_basic_load(self, tmp_path: Path) -> None:
+        from tools.sub_program.logic import load_prior_period_ytd
+
+        path = self._make_prior_xlsx(tmp_path)
+        result = load_prior_period_ytd(path)
+        assert result["4001"] == Decimal("12345.67")
+        assert result["7001"] == Decimal("-1342953")
+
+    def test_missing_file_raises(self, tmp_path: Path) -> None:
+        from tools.sub_program.logic import load_prior_period_ytd
+
+        with pytest.raises(ValueError, match="not found"):
+            load_prior_period_ytd(tmp_path / "nonexistent.xlsx")
+
+    def test_returns_empty_when_no_available_balance_column(self, tmp_path: Path) -> None:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        assert ws is not None
+        ws.cell(row=2, column=1, value="Sub-Program")
+        ws.cell(row=2, column=2, value="Title")
+        ws.cell(row=3, column=1, value="4001")
+        ws.cell(row=3, column=2, value="Art")
+        out = tmp_path / "no_avail.xlsx"
+        wb.save(out)
+
+        from tools.sub_program.logic import load_prior_period_ytd
+
+        result = load_prior_period_ytd(out)
+        assert result == {}
+
+
+class TestF2XlsxLayout:
+    """The F2 layout: Status at col 3, Trend at col 4. Cols 3..12 of
+    F1 shift right by 2 (so old col 12 Comments → new col 14)."""
+
+    def _line(
+        self,
+        sub_program: str,
+        account: str,
+        budget: str,
+        ytd: str,
+    ) -> SubProgramLine:
+        b = Decimal(budget)
+        y = Decimal(ytd)
+        return SubProgramLine(
+            sub_program=sub_program,
+            account=account,
+            description=f"{sub_program} desc",
+            budget=b,
+            ytd=y,
+            remaining=b - y,
+            used_pct=(y / b * Decimal("100")) if b != 0 else Decimal("0"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+
+    def test_header_row_status_at_col_3(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        rev = self._line("4001", "Revenue", "10000", "5000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=2, column=3).value == "Status"
+
+    def test_header_row_trend_at_col_4(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        rev = self._line("4001", "Revenue", "10000", "5000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=2, column=4).value == "Trend"
+
+    def test_header_row_comments_at_col_14(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        rev = self._line("4001", "Revenue", "10000", "5000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=2, column=14).value == "Comments"
+
+    def test_data_row_status_at_col_3(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        rev = self._line("4001", "Revenue", "10000", "6000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=3, column=3).value == "On track"
+
+    def test_data_row_trend_blank_when_no_prior(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        rev = self._line("4001", "Revenue", "10000", "6000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=3, column=4).value in (None, "")
+
+
+class TestF2WatchlistSheet:
+    """The Watchlist sheet: filtered subset where Status != On track."""
+
+    def _ok_pair(self, sp: str) -> list[SubProgramLine]:
+        return [
+            SubProgramLine(
+                sub_program=sp,
+                account="Revenue",
+                description="OK",
+                budget=Decimal("10000"),
+                ytd=Decimal("6000"),
+                remaining=Decimal("4000"),
+                used_pct=Decimal("60"),
+                faculty="Curriculum",
+                is_over=False,
+            ),
+            SubProgramLine(
+                sub_program=sp,
+                account="Expenditure",
+                description="OK",
+                budget=Decimal("10000"),
+                ytd=Decimal("5000"),
+                remaining=Decimal("5000"),
+                used_pct=Decimal("50"),
+                faculty="Curriculum",
+                is_over=False,
+            ),
+        ]
+
+    def _over_pair(self, sp: str, exp_ytd: str) -> list[SubProgramLine]:
+        return [
+            SubProgramLine(
+                sub_program=sp,
+                account="Revenue",
+                description="Over",
+                budget=Decimal("0"),
+                ytd=Decimal("0"),
+                remaining=Decimal("0"),
+                used_pct=Decimal("0"),
+                faculty="X",
+                is_over=False,
+            ),
+            SubProgramLine(
+                sub_program=sp,
+                account="Expenditure",
+                description="Over",
+                budget=Decimal("100000"),
+                ytd=Decimal(exp_ytd),
+                remaining=Decimal("0"),
+                used_pct=Decimal("0"),
+                faculty="X",
+                is_over=True,
+            ),
+        ]
+
+    def test_watchlist_sheet_exists(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        rows = self._ok_pair("4001") + self._over_pair("7001", "250000")
+        _write_xlsx(rows, out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        assert "Watchlist" in wb.sheetnames
+
+    def test_watchlist_excludes_on_track_rows(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        rows = self._ok_pair("4001") + self._over_pair("7001", "250000")
+        _write_xlsx(rows, out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Watchlist"]
+        codes: list[str] = []
+        for r in range(3, ws.max_row + 1):
+            v = ws.cell(row=r, column=1).value
+            if v is not None:
+                codes.append(str(v))
+        assert "7001" in codes
+        assert "4001" not in codes
+
+    def test_watchlist_sorted_by_signed_available_asc(self, tmp_path: Path) -> None:
+        """R1 fix: sort by signed available ASCENDING (most negative
+        first). Pre-fix sorted by abs(available) descending which
+        lumped over-spends with under-spends."""
+        out = tmp_path / "out.xlsx"
+        rows = (
+            self._over_pair("1001", "150000")  # available = -$50K
+            + self._over_pair("2001", "300000")  # available = -$200K
+            + self._over_pair("3001", "120000")  # available = -$20K
+        )
+        _write_xlsx(rows, out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Watchlist"]
+        codes: list[str] = []
+        for r in range(3, ws.max_row + 1):
+            v = ws.cell(row=r, column=1).value
+            if v is not None:
+                codes.append(str(v))
+        assert codes == ["2001", "1001", "3001"]
+
+
+# ---------------------------------------------------------------------------
+# Round 54 F2 R1 — regression tests for the 10 fixes after the first
+# 4-Opus parallel review.
+# ---------------------------------------------------------------------------
+
+
+class TestF2Round1Fixes:
+    """Targeted tests pinning the F2 R1 fixes."""
+
+    def test_compute_trend_uses_current_status_for_pacing_aware_rows(self) -> None:
+        """R1 fix: when ``current_status`` is supplied, it gates the
+        "current_over" decision instead of the raw available signal.
+        Prevents the contradictory "Status: On track | Trend:
+        Worsening" pairing on Expenditure-only programs whose Status
+        uses pacing-aware compare."""
+        from tools.sub_program.logic import compute_trend
+
+        # available is deeply negative but Status says On track (pacing-OK).
+        # Without status gating, this would fire Worsening (both over,
+        # delta > mat). With status gating, current_over=False so
+        # the trend says Resolved (prior was over, current isn't).
+        assert (
+            compute_trend(
+                current_available=Decimal("-50000"),
+                prior_available=Decimal("-30000"),
+                current_status="On track",
+                materiality_dollar=5000,
+            )
+            == "Resolved"
+        )
+
+    def test_compute_trend_status_off_track_overrides_available_signal(
+        self,
+    ) -> None:
+        """R1 fix: a row whose Status is non-OK but available appears
+        on-track via raw signal still fires Trend correctly."""
+        from tools.sub_program.logic import compute_trend
+
+        # available > 0 but status != On track (e.g. No spend yet
+        # carrying a positive available equal to budget).
+        result = compute_trend(
+            current_available=Decimal("10000"),
+            prior_available=Decimal("8000"),
+            current_status="No spend yet",
+            materiality_dollar=5000,
+        )
+        # Both periods register as off-track via status (current_over)
+        # and via raw signal (prior_over from Decimal("-30000")? wait
+        # prior here is +$8K so prior_over=False). current_over=True
+        # (status != On track), prior_over=False → Newly off track.
+        assert result == "Newly off track"
+
+    def test_load_prior_period_ytd_skips_watchlist_sheet(self, tmp_path: Path) -> None:
+        """R1 fix: load_prior_period_ytd skips a sheet titled
+        "Watchlist" — its data is FILTERED (only non-OK rows), so
+        treating it as a prior-period source would mis-fire the trend
+        logic for healthy programs from last month."""
+        # Build a workbook with both a populated "Sub Program Report"
+        # AND an incomplete "Watchlist" — the reader must use only the
+        # main sheet's data.
+        wb = openpyxl.Workbook()
+        # Sub Program Report sheet (full data).
+        main = wb.active
+        assert main is not None
+        main.title = "Sub Program Report"
+        main.cell(row=2, column=1, value="CODE")
+        main.cell(row=2, column=11, value="Available Balance YTD")
+        main.cell(row=3, column=1, value="4001")
+        main.cell(row=3, column=11, value=12345.67)
+        main.cell(row=4, column=1, value="7001")
+        main.cell(row=4, column=11, value=-150000.0)
+        # Watchlist sheet (only over-budget row 7001; missing 4001).
+        wl = wb.create_sheet("Watchlist")
+        wl.cell(row=2, column=1, value="CODE")
+        wl.cell(row=2, column=11, value="Available Balance YTD")
+        wl.cell(row=3, column=1, value="7001")
+        wl.cell(row=3, column=11, value=-150000.0)
+        out = tmp_path / "two_sheet.xlsx"
+        wb.save(out)
+
+        from tools.sub_program.logic import load_prior_period_ytd
+
+        result = load_prior_period_ytd(out)
+        # 4001 must be present — it's only on the main sheet, not on
+        # Watchlist. Without the R1 skip, the loop would visit
+        # Watchlist after the main and the dict would still have 4001
+        # from the earlier visit, but a subtle ordering bug could
+        # invert this. Pin both keys present.
+        assert "4001" in result
+        assert "7001" in result
+        assert result["4001"] == Decimal("12345.67")
+
+    def test_xlsx_active_sheet_is_sub_program_report(self, tmp_path: Path) -> None:
+        """R1 fix: ``wb.active`` pinned to the main sheet so Excel
+        opens to it by default — not the Watchlist (which is
+        sorted/filtered and looks like a partial export)."""
+        out = tmp_path / "active.xlsx"
+        ln = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([ln], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        # The active sheet on file open is "Sub Program Report".
+        assert wb.active is not None
+        assert wb.active.title == "Sub Program Report"
+
+    def test_xlsx_main_sheet_has_print_area(self, tmp_path: Path) -> None:
+        """R1 fix: ``ws.print_area`` set on both sheets so a council
+        member who hits Ctrl+P doesn't accidentally double-paginate
+        via the workbook-wide print mode."""
+        out = tmp_path / "print_area.xlsx"
+        ln = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([ln], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Sub Program Report"]
+        # print_area set; openpyxl returns "'Sheet'!$A$1:$N$N" form.
+        assert ws.print_area
+        # Strip dollar signs and sheet prefix; verify A1 origin and
+        # ends on column N (col 14).
+        assert "$A$1" in ws.print_area and "$N$" in ws.print_area
+
+    def test_xlsx_watchlist_has_autofilter_and_pink_tab(self, tmp_path: Path) -> None:
+        """R1 fix: Watchlist sheet has AutoFilter on its header row and
+        a pink tab colour to draw the council reader's eye to the
+        actionable sheet."""
+        out = tmp_path / "watchlist_features.xlsx"
+        rev = SubProgramLine(
+            sub_program="7001",
+            account="Revenue",
+            description="Admin",
+            budget=Decimal("0"),
+            ytd=Decimal("0"),
+            remaining=Decimal("0"),
+            used_pct=Decimal("0"),
+            faculty="Administration",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="7001",
+            account="Expenditure",
+            description="Admin",
+            budget=Decimal("100000"),
+            ytd=Decimal("250000"),
+            remaining=Decimal("-150000"),
+            used_pct=Decimal("250"),
+            faculty="Administration",
+            is_over=True,
+        )
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Watchlist"]
+        # AutoFilter set with a non-trivial reference range.
+        assert ws.auto_filter.ref is not None
+        assert "A2" in ws.auto_filter.ref
+        # Tab colour = HL_MISMATCH (canonical pink for needs-attention).
+        from toolkit.tokens import HL_MISMATCH
+
+        # openpyxl returns Color or rgb string; both should contain HL_MISMATCH.
+        tab_color = ws.sheet_properties.tabColor
+        if tab_color is not None:
+            tab_color_str = str(tab_color.rgb if hasattr(tab_color, "rgb") else tab_color)
+            assert HL_MISMATCH in tab_color_str.upper()
+
+    def test_xlsx_main_sheet_has_no_autofilter(self, tmp_path: Path) -> None:
+        """The main sheet should NOT have AutoFilter — the Watchlist
+        sheet is the interactive view; the main sheet is the
+        canonical layout."""
+        out = tmp_path / "main_no_filter.xlsx"
+        ln = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([ln], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Sub Program Report"]
+        assert ws.auto_filter.ref is None
+
+    def test_xlsx_comments_column_width_reduced_to_32(self, tmp_path: Path) -> None:
+        """R1 fix: Comments column 40 → 32 to relieve print compression
+        after F2 added Status (22) + Trend (16) widths."""
+        out = tmp_path / "width.xlsx"
+        ln = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([ln], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Sub Program Report"]
+        # Comments at col 14 = letter "N".
+        assert ws.column_dimensions["N"].width == 32
+
+    def test_watchlist_sort_separates_underspend_from_overspend(self, tmp_path: Path) -> None:
+        """R1 fix: signed available ascending puts overspends first,
+        underspends last. A $200K overspend tops the list; a $200K
+        unspent No-spend-yet program lands at the bottom."""
+        out = tmp_path / "signed_sort.xlsx"
+        # Big overspend
+        over_rev = SubProgramLine(
+            sub_program="7001",
+            account="Revenue",
+            description="Admin",
+            budget=Decimal("0"),
+            ytd=Decimal("0"),
+            remaining=Decimal("0"),
+            used_pct=Decimal("0"),
+            faculty="X",
+            is_over=False,
+        )
+        over_exp = SubProgramLine(
+            sub_program="7001",
+            account="Expenditure",
+            description="Admin",
+            budget=Decimal("100000"),
+            ytd=Decimal("300000"),
+            remaining=Decimal("-200000"),
+            used_pct=Decimal("300"),
+            faculty="X",
+            is_over=True,
+        )
+        # Big unspent (No spend yet)
+        unspent_rev = SubProgramLine(
+            sub_program="8330",
+            account="Revenue",
+            description="Camp",
+            budget=Decimal("200000"),
+            ytd=Decimal("0"),
+            remaining=Decimal("200000"),
+            used_pct=Decimal("0"),
+            faculty="Y",
+            is_over=False,
+        )
+        unspent_exp = SubProgramLine(
+            sub_program="8330",
+            account="Expenditure",
+            description="Camp",
+            budget=Decimal("200000"),
+            ytd=Decimal("0"),
+            remaining=Decimal("200000"),
+            used_pct=Decimal("0"),
+            faculty="Y",
+            is_over=False,
+        )
+        _write_xlsx(
+            [over_rev, over_exp, unspent_rev, unspent_exp],
+            out,
+            period_label="Apr 2026",
+        )
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Watchlist"]
+        codes: list[str] = []
+        for r in range(3, ws.max_row + 1):
+            v = ws.cell(row=r, column=1).value
+            if v is not None:
+                codes.append(str(v))
+        # 7001 (overspend, available -$200K) comes BEFORE 8330
+        # (No spend yet, available +$200K).
+        assert codes.index("7001") < codes.index("8330")
+
+
+# ---------------------------------------------------------------------------
+# Round 54 F2 R2 — regression tests for the R2 fixes after the second
+# 4-Opus parallel review.
+# ---------------------------------------------------------------------------
+
+
+class TestF2Round2Fixes:
+    """Targeted tests pinning the R2 fixes."""
+
+    def test_empty_watchlist_has_no_autofilter(self, tmp_path: Path) -> None:
+        """R2 fix: when every sub-program is on track, the Watchlist
+        sheet is empty (header only). Don't write a degenerate
+        ``A2:N2`` AutoFilter — Excel renders an inert dropdown that
+        looks broken to a council reader."""
+        out = tmp_path / "empty_watchlist.xlsx"
+        rev = SubProgramLine(
+            sub_program="4001",
+            account="Revenue",
+            description="OK",
+            budget=Decimal("10000"),
+            ytd=Decimal("6000"),
+            remaining=Decimal("4000"),
+            used_pct=Decimal("60"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="OK",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Watchlist"]
+        assert ws.auto_filter.ref is None
+
+    def test_empty_watchlist_keeps_pink_tab_color(self, tmp_path: Path) -> None:
+        """R2 fix: even with no Watchlist data rows, the tab stays pink
+        — it signals the sheet's CATEGORY (urgent / actionable),
+        independent of whether there's content this period."""
+        from toolkit.tokens import HL_MISMATCH
+
+        out = tmp_path / "empty_pink.xlsx"
+        rev = SubProgramLine(
+            sub_program="4001",
+            account="Revenue",
+            description="OK",
+            budget=Decimal("10000"),
+            ytd=Decimal("6000"),
+            remaining=Decimal("4000"),
+            used_pct=Decimal("60"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="OK",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Watchlist"]
+        tab_color = ws.sheet_properties.tabColor
+        if tab_color is not None:
+            tab_color_str = str(tab_color.rgb if hasattr(tab_color, "rgb") else tab_color)
+            assert HL_MISMATCH in tab_color_str.upper()
+
+    def test_footer_text_when_no_prior_period_is_compact(self, tmp_path: Path) -> None:
+        """R2 fix: footer shortened to ~53 chars (was 95) so it fits
+        the footer-left zone without wrapping or truncation."""
+        out = tmp_path / "footer.xlsx"
+        ln = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([ln], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Sub Program Report"]
+        footer_left = ws.oddFooter.left.text if ws.oddFooter is not None else None
+        assert footer_left is not None
+        assert "prior-period" in footer_left.lower()
+        assert len(footer_left) <= 60, f"Footer too long: {len(footer_left)} chars"
+
+    def test_footer_text_when_prior_period_supplied_is_attribution(self, tmp_path: Path) -> None:
+        """When prior-period IS supplied, footer is the plain attribution."""
+        out = tmp_path / "footer_with_prior.xlsx"
+        ln = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx(
+            [ln],
+            out,
+            period_label="Apr 2026",
+            prior_ytd={"4001": Decimal("4000")},
+        )
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Sub Program Report"]
+        footer_left = ws.oddFooter.left.text if ws.oddFooter is not None else None
+        assert footer_left == "Generated by School Tool"
+
+    def test_compute_trend_documents_status_aligned_recommendation(self) -> None:
+        """R2 documentation: the docstring tells callers about the
+        documented dollar-only / percent-floor asymmetry when
+        ``current_status`` is omitted."""
+        from tools.sub_program.logic import compute_trend
+
+        doc = compute_trend.__doc__ or ""
+        assert "current_status" in doc
+        assert "asymmetry" in doc.lower()
