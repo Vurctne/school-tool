@@ -107,13 +107,8 @@ _OVER_BG = "#" + HL_MISMATCH
 # ---------------------------------------------------------------------------
 
 # Round 45 Phase A — variance-first columns.
-#
-# Replaces the prior Budget/YTD/Remaining/Used % shape with the
-# variance-analysis-aligned shape: signed Variance $ and Var % as
-# headline, with Pacing as the early-warning multiplier (Used % ÷
-# Calendar %; 1.00 = on pace, >1.00 = ahead of calendar). Remaining
-# and Used % drop off the headline view (they're derivable; Used %
-# is still kept on the dataclass for the legacy XLSX export).
+# Round 56 — pacing column dropped along with all pacing-based
+# judgements. Variance $ + Var % carry the over-budget signal.
 _TABLE_COLUMNS: list[dict[str, Any]] = [
     {"key": "sub_program", "label": "Sub-program", "width": 90, "mono": True},
     {"key": "account", "label": "Account", "width": 80, "mono": True},
@@ -128,27 +123,12 @@ _TABLE_COLUMNS: list[dict[str, Any]] = [
         "mono": True,
     },
     {"key": "variance_pct", "label": "Var %", "width": 70, "align": "right", "mono": True},
-    # Round 48 — column header in plain English. Values render as
-    # ``+4%`` / ``−10%`` / ``On track`` / ``Unknown`` rather than the
-    # multiplier ``1.04``.
-    {"key": "pacing", "label": "Spending pace", "width": 100, "align": "right", "mono": True},
 ]
 
-# Round 46 Phase B — Watchlist columns. Same shape as the headline tabs
-# plus a "Why" column at the right that names which trigger flagged the
-# row:
-#
-#   "Over $ + pace"  — line is over budget AND above the dollar
-#                       materiality floor AND pacing >= 1.10
-#   "Over $"         — over budget AND above the materiality floor
-#                       (pacing < 1.10 — they're on calendar but the
-#                       dollar damage is already material)
-#   "Pace"           — pacing >= 1.10 (10%+ ahead of calendar) but
-#                       not yet over budget — early warning
-#
-# Sort: |variance_amount| descending so the dollar-largest concerns
-# bubble to the top. Materiality and pacing thresholds come from the
-# corresponding inputs (defaults: $5,000 / 1.10).
+# Round 46 Phase B — Watchlist columns. Same shape as the headline
+# tabs plus a "Why" column. Round 56: pacing column dropped; the
+# Watchlist filter is now strictly over-budget (Status non-OK), so
+# the only "Why" values are over-budget triggers.
 _WATCHLIST_COLUMNS: list[dict[str, Any]] = [
     {"key": "sub_program", "label": "Sub-program", "width": 90, "mono": True},
     {"key": "account", "label": "Account", "width": 80, "mono": True},
@@ -163,45 +143,25 @@ _WATCHLIST_COLUMNS: list[dict[str, Any]] = [
         "mono": True,
     },
     {"key": "variance_pct", "label": "Var %", "width": 70, "align": "right", "mono": True},
-    {"key": "pacing", "label": "Spending pace", "width": 100, "align": "right", "mono": True},
-    # Round 48 — "Issue" reads as plain English; "Why" was a
-    # finance-style abbreviation that left users guessing.
     {"key": "why", "label": "Issue", "width": 130, "mono": False},
 ]
 
 
-# Pacing threshold above which a line is flagged "ahead of pace".
-# 1.10 = 10% ahead of calendar. Tuned to match the macro-level
-# "danger" tone in the metric strip (also 1.10).
-_PACING_WATCH_THRESHOLD = 1.10
+# Round 56 — _PACING_WATCH_THRESHOLD constant dropped (no pacing).
 
 
 def _watchlist_why(line: Any) -> str:
     """Return the short trigger label for a watchlist row.
 
-    The Watchlist tab includes a line if it's over budget AND meets the
-    dollar materiality floor (``is_over AND is_material``), OR if it's
-    pacing >= 1.10 (≥10% ahead of calendar). The "Why" column names
-    which trigger fired so the user can scan the right column and
-    understand why each line earned its place on the list.
-
-    Returns "" if no trigger fires (defensive — caller should not
-    include such rows in the Watchlist).
+    Round 56: Watchlist now contains only over-budget rows (Status
+    non-OK). The "Why" column reduces to "Over budget" for materially-
+    over rows and an empty string for the marginal cases (which won't
+    appear on the Watchlist anyway since the filter is strict).
     """
-    over_money = bool(line.is_over) and bool(line.is_material)
-    ahead_pace = float(line.pacing) >= _PACING_WATCH_THRESHOLD
-    # Round 47 — wording: "$" alone reads as decorative currency rather
-    # than the trigger label, so spell it out. Width-checked against
-    # the column's 110 px allocation.
-    # Round 48 — wording targets a non-finance reader. "Spending too
-    # fast" replaces "Ahead of pace" because users with no finance
-    # background read "ahead" as positive ("ahead of schedule = good").
-    if over_money and ahead_pace:
-        return "Over budget; spending too fast"
-    if over_money:
+    if bool(line.is_over) and bool(line.is_material):
         return "Over budget"
-    if ahead_pace:
-        return "Spending too fast"
+    if bool(line.is_over):
+        return "Over budget (small)"
     return ""
 
 
@@ -286,30 +246,7 @@ def _fmt_signed_pct(value: Decimal) -> str:
     return "0.0%"
 
 
-def _fmt_pacing(value: Decimal) -> str:
-    """Format pacing as a plain-English relative-percent.
-
-    Pacing is the multiplier ``used_pct / calendar_pct``. Round 48
-    converts the bare multiplier (e.g. ``1.04``, ``2.41``) into a
-    signed relative-percent vs the calendar (``+4%``, ``+141%``) so a
-    school business officer with no finance background reads it as
-    "spending 4% faster than expected" without needing to be told
-    that 1.0 means on-pace. Below-pace shows ``−X%`` with U+2212.
-
-    Special cases:
-    * value == 0 → "Unknown" (calendar_pct couldn't be inferred from
-      the period label; pacing has no denominator).
-    * value == 1.00 → "On track" — exact agreement with the calendar
-      is rare enough to deserve a verbal confirmation rather than
-      "+0%".
-    """
-    if value == 0:
-        return "Unknown"
-    diff_pct = (value - Decimal("1")) * Decimal("100")
-    if diff_pct == 0:
-        return "On track"
-    sign = "+" if diff_pct > 0 else _MINUS
-    return f"{sign}{abs(diff_pct):.0f}%"
+# Round 56 — _fmt_pacing dropped along with the pacing field.
 
 
 class SubProgramBudgetReportTool:
@@ -418,9 +355,9 @@ class SubProgramBudgetReportTool:
     # Round 21 — per-section thresholds.
     _cached_revenue_threshold: float = 101.0
     _cached_expense_threshold: float = 101.0
-    # Round 45 Phase A — dollar materiality + cached calendar pct.
+    # Round 45 Phase A — dollar materiality. Round 56 dropped
+    # _cached_calendar_pct (no pacing).
     _cached_materiality_dollar: int = 5000
-    _cached_calendar_pct: float = 0.0
 
     def run(self, paths: dict[str, Any], progress: ProgressFn) -> ToolResult:
         try:
@@ -503,7 +440,6 @@ class SubProgramBudgetReportTool:
             self._cached_revenue_threshold = revenue_threshold
             self._cached_expense_threshold = expense_threshold
             self._cached_materiality_dollar = materiality_dollar
-            self._cached_calendar_pct = summary.calendar_pct
 
             # _last_output_path not set here — set when Export is called.
 
@@ -571,16 +507,14 @@ class SubProgramBudgetReportTool:
         from dataclasses import replace
 
         # Recompute is_over flags using the per-section thresholds.
-        # Round 45 Phase A — also re-derive variance + pacing + materiality
-        # so the slider preview shows the same fields the post-Run table
-        # does.  Calendar pct is stable (extracted from the period label
-        # at parse time) so we reuse the cached value.
+        # Round 45 Phase A — also re-derive variance + materiality so the
+        # slider preview shows the same fields the post-Run table does.
+        # Round 56 — pacing dropped along with calendar_pct.
         new_lines = logic._recompute_is_over(
             self._cached_summary.lines,
             self._cached_threshold,
             revenue_threshold=self._cached_revenue_threshold,
             expense_threshold=self._cached_expense_threshold,
-            calendar_pct=self._cached_calendar_pct,
             materiality_dollar=self._cached_materiality_dollar,
         )
         new_over = [ln for ln in new_lines if ln.is_over]
@@ -792,11 +726,11 @@ class SubProgramBudgetReportTool:
                     "description": ln.description,
                     "budget": _fmt_dollar(ln.budget),
                     "ytd": _fmt_dollar(ln.ytd),
-                    # Round 45 Phase A — variance + pacing replace
-                    # remaining + used_pct as the headline numerics.
+                    # Round 45 Phase A — variance replaces remaining +
+                    # used_pct as the headline numerics. Round 56 dropped
+                    # the pacing column along with all pacing computation.
                     "variance_amount": _fmt_signed_dollar(ln.variance_amount),
                     "variance_pct": _fmt_signed_pct(ln.variance_pct),
-                    "pacing": _fmt_pacing(ln.pacing),
                     "_faculty": ln.faculty or "Unknown",
                     "_over": ln.is_over,  # threshold-aware flag set by logic.py
                     "_material": ln.is_material,  # below-floor lines render muted
@@ -849,7 +783,6 @@ class SubProgramBudgetReportTool:
                         "ytd": "",
                         "variance_amount": "",
                         "variance_pct": "",
-                        "pacing": "",
                         "_faculty": ln.faculty or "Unknown",
                         "_over": ln.is_over,
                         "_material": ln.is_material,
@@ -965,10 +898,11 @@ class SubProgramBudgetReportTool:
         # ------------------------------------------------------------------
         # Round 46 Phase B — Watchlist tab
         # ------------------------------------------------------------------
-        # Pre-filter the summary lines to those that meet at least one
-        # watchlist trigger (over-budget AND material, OR pacing >= 1.10),
-        # sort by absolute variance descending, and render with the
-        # signed-variance / pacing columns plus a "Why" column.
+        # Pre-filter the summary lines to over-budget rows that meet the
+        # dollar materiality floor, sort by absolute variance descending,
+        # and render with the signed-variance columns plus a "Why" column.
+        # Round 56 — pacing trigger dropped per user direction; the
+        # Watchlist is now strictly an over-budget list.
         #
         # Watchlist rows skip the comment sub-row interleaving used in
         # the Revenue / Expense tabs — the goal here is "tell me which
@@ -976,11 +910,7 @@ class SubProgramBudgetReportTool:
         # commentary attached". Click-to-edit still works through the
         # existing _on_row_click hook (clicking a watchlist row opens
         # the same inline comment editor).
-        watchlist_lines = [
-            ln
-            for ln in summary.lines
-            if (ln.is_over and ln.is_material) or float(ln.pacing) >= _PACING_WATCH_THRESHOLD
-        ]
+        watchlist_lines = [ln for ln in summary.lines if ln.is_over and ln.is_material]
         # Sort: |variance_amount| desc, then sub_program for stable order.
         watchlist_lines.sort(
             key=lambda ln: (-abs(ln.variance_amount), ln.sub_program),
@@ -1000,7 +930,6 @@ class SubProgramBudgetReportTool:
                     "ytd": _fmt_dollar(ln.ytd),
                     "variance_amount": _fmt_signed_dollar(ln.variance_amount),
                     "variance_pct": _fmt_signed_pct(ln.variance_pct),
-                    "pacing": _fmt_pacing(ln.pacing),
                     "why": _watchlist_why(ln),
                     "_faculty": ln.faculty or "Unknown",
                     "_over": ln.is_over,
@@ -1068,68 +997,24 @@ class SubProgramBudgetReportTool:
         # ------------------------------------------------------------------
         # Round 45 Phase A — metric-card strip
         # ------------------------------------------------------------------
-        # Four cards summarising the run at a glance, rendered by the shell
-        # via toolkit.primitives.Metric (label / big number / tone).
-        #
-        # 1. Sub-programs across faculties — scope of the run.
-        # 2. YTD spend % of annual — how far through the budget envelope.
-        # 3. Pacing — Σ used_pct / Σ calendar_pct, weighted by budget. The
-        #    only macro-level early-warning signal in the report; tone is
-        #    "warn" when 1.10 ≥ pacing > 1.00 ("slight ahead"), "danger"
-        #    when pacing > 1.10, "ok" otherwise.
-        # 4. Watchlist — count of lines that are over-threshold AND meet
-        #    the dollar materiality floor. Below-materiality over-budget
-        #    rows are excluded from the count by design (#4 in the brief);
-        #    they still appear in the table but render muted, not danger.
-        material_over = [ln for ln in summary.lines if ln.is_over and ln.is_material]
-        watchlist_count = len(material_over)
-
-        if summary.calendar_pct > 0:
-            macro_pacing = float(ytd_pct) / summary.calendar_pct
-        else:
-            macro_pacing = 0.0
-        # Round 48 — show the metric strip in the same plain-English
-        # language as the Spending pace column: "+4%" / "−10%" /
-        # "On track" / "Unknown".
-        if macro_pacing == 0:
-            pacing_value = "Unknown"
-        else:
-            diff = (macro_pacing - 1.0) * 100
-            if abs(diff) < 0.5:
-                pacing_value = "On track"
-            else:
-                pacing_value = f"+{diff:.0f}%" if diff > 0 else f"{_MINUS}{abs(diff):.0f}%"
-        if macro_pacing == 0:
-            pacing_tone: str = "neutral"
-        elif macro_pacing > 1.10:
-            pacing_tone = "danger"
-        elif macro_pacing > 1.00:
-            pacing_tone = "warn"
-        else:
-            pacing_tone = "ok"
-
-        watchlist_tone: str = "ok" if watchlist_count == 0 else "danger"
-
+        # Round 56 — Pacing card and Watchlist card dropped along with
+        # all pacing-based judgements. The Watchlist tab itself still
+        # carries the over-budget count in its tab label
+        # (e.g. "Watchlist (3)"), so a separate card is redundant.
+        # The faculty count is also dropped from the Sub-programs card
+        # per user direction — the Faculty rail is gone (Round 55) so
+        # there's no in-app navigator that would benefit from a faculty
+        # tally on the headline strip.
         metric_cards: list[tuple[str, str, str | None]] = [
             (
                 "Sub-programs",
-                f"{n_lines} · {n_faculties} fac",
+                f"{n_lines}",
                 "neutral",
             ),
             (
                 "YTD spend",
                 f"{ytd_pct}%",
                 "neutral",
-            ),
-            (
-                "Pacing",
-                pacing_value,
-                pacing_tone,
-            ),
-            (
-                "Watchlist",
-                str(watchlist_count),
-                watchlist_tone,
             ),
         ]
 
@@ -1402,7 +1287,6 @@ class SubProgramBudgetReportTool:
         self._cached_revenue_threshold = 101.0
         self._cached_expense_threshold = 101.0
         self._cached_materiality_dollar = 5000
-        self._cached_calendar_pct = 0.0
 
     def _merge_commentary_overrides(self, summary: ReportSummary) -> ReportSummary:
         """Round 51 Phase D — apply the 4-tuple override per sub-program.

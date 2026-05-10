@@ -318,19 +318,25 @@ class TestGenerateReport:
             f"Expected 'Sub Program Report' sheet; got {wb.sheetnames}"
         )
         ws = wb["Sub Program Report"]
-        headers = [str(ws.cell(2, c).value or "") for c in range(1, 13)]
+        # F2 layout: Status (col 3) + Trend (col 4) lead the financials
+        # so the eye lands on the call-to-action before the dollar
+        # columns. Total 14 cols; legacy 12-col baseline pinned by an
+        # earlier round of this test was rewritten in Round 56.
+        headers = [str(ws.cell(2, c).value or "") for c in range(1, 15)]
         assert headers[0] == "CODE"
         assert headers[1] == "PROGRAM NAME"
-        assert headers[2].startswith("Funds from Previous Years")
-        assert headers[3].startswith("Budget Revenue")
-        assert headers[4].startswith("Total Budget Allocation Expenditure")
-        assert headers[5] == "Revenue YTD"
-        assert headers[6] == "Expenditure YTD"
-        assert headers[7] == "Less outstanding orders"
-        assert headers[8] == "Available Balance YTD"
-        assert headers[9] == "Available Balance % YTD"
-        assert headers[10] == "Revenue Budget % Received YTD"
-        assert headers[11] == "Comments"
+        assert headers[2] == "Status"
+        assert headers[3] == "Trend"
+        assert headers[4].startswith("Funds from Previous Years")
+        assert headers[5].startswith("Budget Revenue")
+        assert headers[6].startswith("Total Budget Allocation Expenditure")
+        assert headers[7] == "Revenue YTD"
+        assert headers[8] == "Expenditure YTD"
+        assert headers[9] == "Less outstanding orders"
+        assert headers[10] == "Available Balance YTD"
+        assert headers[11] == "Available Balance % YTD"
+        assert headers[12] == "Revenue Budget % Received YTD"
+        assert headers[13] == "Comments"
 
     def test_output_row_count_matches_unique_subprograms(self, tmp_path: Path) -> None:
         """Round 38 — one row per sub-program (was: one row per
@@ -1401,12 +1407,18 @@ class TestStructuredCommentaryRound1Fixes:
 
 
 class TestStatusPill:
-    """``compute_status_pill`` returns one of the canonical status strings."""
+    """``compute_status_pill`` returns one of the canonical status strings.
+
+    Round 56 redesign — pacing-free contract. The function compares
+    ``exp_ytd`` against ``expense_threshold% × annual_exp_budget`` and
+    buckets the overrun by dollar / percent past the threshold. The
+    ``available`` and ``calendar_pct`` parameters and the ``No spend
+    yet`` pill (which depended on calendar awareness) are gone.
+    """
 
     def test_status_values_tuple_has_designed_shape(self) -> None:
         """Pin the status values so a stray edit can't silently drift.
-        R1 fix: 'Material concern' renamed to 'Significant overspend'
-        per UX critic — was finance jargon to a non-finance reader."""
+        Round 56 dropped 'No spend yet' along with calendar_pct."""
         from tools.sub_program.logic import _STATUS_VALUES
 
         assert _STATUS_VALUES == (
@@ -1414,19 +1426,16 @@ class TestStatusPill:
             "Slightly over",
             "Significant overspend",
             "Investigate urgently",
-            "No spend yet",
             "Spent without budget",
         )
 
-    def test_on_track_when_available_balance_positive(self) -> None:
-        """Surplus / under-spend = on track."""
+    def test_on_track_when_under_budget(self) -> None:
+        """exp_ytd well within budget → on track."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("5000"),
                 annual_exp_budget=Decimal("10000"),
-                rev_ytd=Decimal("3000"),
                 exp_ytd=Decimal("2000"),
             )
             == "On track"
@@ -1434,15 +1443,17 @@ class TestStatusPill:
 
     def test_on_track_when_overrun_below_materiality_floor(self) -> None:
         """A $50 overrun on a $30 budget shouldn't ring alarm bells —
-        below the dollar materiality floor it reads as on track."""
+        below the dollar materiality floor (and not >50% past) it reads
+        as on track."""
         from tools.sub_program.logic import compute_status_pill
 
+        # $80 spend on a $30 budget = 167% → 67 pp past threshold which
+        # IS over the 50% urgent floor. Use a smaller relative overrun
+        # so we land in the materiality fallthrough.
         assert (
             compute_status_pill(
-                available=Decimal("-50"),
-                annual_exp_budget=Decimal("30"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("80"),
+                annual_exp_budget=Decimal("10000"),
+                exp_ytd=Decimal("10800"),  # $800 over (>$500 noise) but below $5K mat
                 materiality_dollar=5000,
             )
             == "On track"
@@ -1451,28 +1462,27 @@ class TestStatusPill:
     def test_slightly_over_for_5k_to_25k_overrun(self) -> None:
         from tools.sub_program.logic import compute_status_pill
 
+        # $112K spend on $100K budget = 12% over → $12K overrun past
+        # the 101% threshold ($101K), so $11K past threshold. With
+        # default materiality_dollar=5000 → Slightly over bucket.
         assert (
             compute_status_pill(
-                available=Decimal("-12000"),  # $12K over
                 annual_exp_budget=Decimal("100000"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("112000"),
+                exp_ytd=Decimal("112000"),  # $11K past 101% threshold
             )
             == "Slightly over"
         )
 
     def test_significant_overspend_for_25k_to_100k_overrun(self) -> None:
-        """R1 fix: pill name changed from 'Material concern' to
-        'Significant overspend' (plain English)."""
+        """$25K-$100K past the threshold lands in the middle bucket."""
         from tools.sub_program.logic import compute_status_pill
 
+        # $250K on $200K budget = 25% over → $48K past 101% threshold
+        # ($202K) → Significant overspend.
         assert (
             compute_status_pill(
-                available=Decimal("-50000"),  # $50K over
                 annual_exp_budget=Decimal("200000"),
-                annual_rev_budget=Decimal("200000"),  # combined program
-                rev_ytd=Decimal("150000"),
-                exp_ytd=Decimal("200000"),
+                exp_ytd=Decimal("250000"),
             )
             == "Significant overspend"
         )
@@ -1481,12 +1491,12 @@ class TestStatusPill:
         """Big dollar overrun = urgent regardless of percent."""
         from tools.sub_program.logic import compute_status_pill
 
+        # $700K on $581K budget = $113K past 101% threshold ($587K) →
+        # urgent (>$100K dollar floor).
         assert (
             compute_status_pill(
-                available=Decimal("-1342953"),  # the real KMAR Admin row
                 annual_exp_budget=Decimal("581700"),
-                rev_ytd=Decimal("26436"),
-                exp_ytd=Decimal("192126"),
+                exp_ytd=Decimal("700000"),
             )
             == "Investigate urgently"
         )
@@ -1495,94 +1505,86 @@ class TestStatusPill:
         """Big PERCENT overrun = urgent even if dollar-small."""
         from tools.sub_program.logic import compute_status_pill
 
-        # $30K over a $20K budget = 150% — urgent
+        # $50K spend on $20K budget = 250% → 149 pp past 101% threshold,
+        # well above 50% → urgent.
         assert (
             compute_status_pill(
-                available=Decimal("-30000"),
                 annual_exp_budget=Decimal("20000"),
-                rev_ytd=Decimal("0"),
                 exp_ytd=Decimal("50000"),
             )
             == "Investigate urgently"
         )
 
-    def test_no_spend_yet_when_budget_set_and_calendar_past_25pct(self) -> None:
-        """Sub-program with budget allocated but no movement past 25% of
-        the year — council members would ask 'shouldn't this be funded
-        by now?'."""
+    def test_unbudgeted_program_with_no_spend_is_on_track(self) -> None:
+        """Sub-program with $0 annual budget and no spend — chart-of-
+        accounts placeholder, on track (not 'No spend yet' anymore;
+        that pill was dropped in Round 56)."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("50000"),  # full budget still available
-                annual_exp_budget=Decimal("50000"),
-                rev_ytd=Decimal("0"),
+                annual_exp_budget=Decimal("0"),
                 exp_ytd=Decimal("0"),
-                calendar_pct=33.3,  # April = 4/12
-            )
-            == "No spend yet"
-        )
-
-    def test_no_spend_yet_suppressed_when_calendar_under_25pct(self) -> None:
-        """Early in the year, 'no spend yet' is normal, not noteworthy."""
-        from tools.sub_program.logic import compute_status_pill
-
-        assert (
-            compute_status_pill(
-                available=Decimal("50000"),
-                annual_exp_budget=Decimal("50000"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("0"),
-                calendar_pct=15.0,  # February
             )
             == "On track"
         )
 
-    def test_no_spend_yet_suppressed_when_budget_below_materiality(self) -> None:
-        """A $30 budget with no spend isn't worth surfacing — it's the
-        same chart-of-accounts noise that the $50-over-$30 case hides."""
+    def test_budgeted_program_with_no_spend_is_on_track(self) -> None:
+        """Round 56 — without calendar awareness we can't distinguish
+        'early in the year' from 'late in the year, suspiciously
+        unfunded'. Default to On track and rely on the YTD column to
+        convey the absence of spend."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("30"),
-                annual_exp_budget=Decimal("30"),
-                rev_ytd=Decimal("0"),
+                annual_exp_budget=Decimal("50000"),
                 exp_ytd=Decimal("0"),
-                calendar_pct=33.3,
-                materiality_dollar=5000,
             )
             == "On track"
         )
 
     def test_spent_without_budget_when_budget_zero_and_ytd_nonzero(self) -> None:
-        """A sub-program with $0 annual budget but $X YTD spend —
-        capital spend without council approval, real category of finance
-        concern."""
+        """A sub-program with $0 annual budget on BOTH sides but $X YTD
+        spend and no revenue collected — capital spend without council
+        approval, a real category of finance concern."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("-454545"),
                 annual_exp_budget=Decimal("0"),
+                annual_rev_budget=Decimal("0"),
                 rev_ytd=Decimal("0"),
                 exp_ytd=Decimal("454545"),
             )
             == "Spent without budget"
         )
 
-    def test_zero_zero_row_is_on_track_not_no_spend_yet(self) -> None:
-        """Placeholder row (no budget, no spend) — chart-of-accounts
-        noise. Not 'no spend yet' (which implies a budget exists)."""
+    def test_spent_without_budget_excludes_revenue_collection_program(self) -> None:
+        """If rev_ytd > 0 the program is a cost-recovery / fundraising
+        line — its expenditure is matched by collected revenue, so
+        Spent-without-budget doesn't apply."""
         from tools.sub_program.logic import compute_status_pill
 
+        result = compute_status_pill(
+            annual_exp_budget=Decimal("0"),
+            annual_rev_budget=Decimal("0"),
+            rev_ytd=Decimal("8000"),  # collected revenue
+            exp_ytd=Decimal("5000"),
+        )
+        assert result != "Spent without budget"
+
+    def test_threshold_cushion_is_respected(self) -> None:
+        """Threshold = 105% means used_pct must exceed 105 to flag.
+        At exactly 105% we stay On track."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # exp_ytd = 105K on $100K budget = exactly 105% → On track.
         assert (
             compute_status_pill(
-                available=Decimal("0"),
-                annual_exp_budget=Decimal("0"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("0"),
-                calendar_pct=33.3,
+                annual_exp_budget=Decimal("100000"),
+                exp_ytd=Decimal("105000"),
+                expense_threshold=105.0,
             )
             == "On track"
         )
@@ -1870,41 +1872,37 @@ class TestF1XlsxIntegration:
         )
 
     def test_xlsx_status_urgent_for_admin_scale_overrun(self, tmp_path: Path) -> None:
-        """The real KMAR Admin row (row 55, $1.3M overdraw) — Status
-        must read 'Investigate urgently'."""
+        """Round 56: an Admin sub-program at $700K spend on $582K
+        budget (≈$113K past the 101% threshold) reads as 'Investigate
+        urgently' via the >$100K dollar floor."""
         out = tmp_path / "out.xlsx"
-        # Simplified: $581,700 expenditure budget, $192,126 spent + huge orders.
-        # The real row's available balance is -$1,342,953 — engineer the line
-        # to produce that.
         rev = self._line(
             sub_program="7001",
             account="Revenue",
             budget="0",
             ytd="26436",
         )
-        # Expenditure side: budget $581,700, ytd $192,126, but huge outstanding
-        # orders push available balance deep negative.
         exp = SubProgramLine(
             sub_program="7001",
             account="Expenditure",
             description="Administration",
             budget=Decimal("581700"),
-            ytd=Decimal("192126"),
-            remaining=Decimal("389574"),
-            used_pct=Decimal("33"),
+            ytd=Decimal("700000"),  # $113K past 101% threshold ($587K)
+            remaining=Decimal("-118300"),
+            used_pct=Decimal("120"),
             faculty="Administration",
             is_over=True,
-            outstanding_orders=Decimal("1732527"),
         )
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         assert ws.cell(row=3, column=3).value == "Investigate urgently"
 
-    def test_xlsx_status_no_spend_yet_when_budget_set_no_movement(self, tmp_path: Path) -> None:
-        """A sub-program with material budget but $0 YTD past 25% of the
-        year. Budget must be above the $5K materiality floor — a smaller
-        budget reads as chart-of-accounts noise, not a council issue."""
+    def test_xlsx_status_on_track_when_budget_set_no_movement(self, tmp_path: Path) -> None:
+        """Round 56 — without calendar awareness we can't distinguish
+        'early in the year' from 'late in the year'. A budgeted program
+        with $0 YTD spend reads as On track; the YTD column conveys the
+        absence of spend on its own."""
         out = tmp_path / "out.xlsx"
         rev = self._line(
             sub_program="8330",
@@ -1918,11 +1916,10 @@ class TestF1XlsxIntegration:
             budget="10000",
             ytd="0",
         )
-        # April 2026 → calendar_pct ≈ 33.3
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=3).value == "No spend yet"
+        assert ws.cell(row=3, column=3).value == "On track"
 
 
 # ---------------------------------------------------------------------------
@@ -1956,48 +1953,40 @@ class TestF1Round1Fixes:
             is_over=False,
         )
 
-    def test_expenditure_only_on_pace_renders_on_track(self) -> None:
-        """R1 fix: Curriculum sub-program with $10K exp budget, $3,500
-        YTD spend at calendar 33% — within ±15% pacing band → On track,
-        NOT 'Significant overspend' as the raw available signal would
-        produce."""
+    def test_expenditure_only_within_threshold_renders_on_track(self) -> None:
+        """Round 56: Curriculum sub-program with $10K exp budget, $3,500
+        YTD spend = 35% used. With default 101% threshold, used_pct
+        ≤ threshold → On track."""
         from tools.sub_program.logic import compute_status_pill
 
-        # exp_y / eb = 0.35, expected = 0.33, gap = 0.02 → within ±15% band
         assert (
             compute_status_pill(
-                available=Decimal("-3500"),
                 annual_exp_budget=Decimal("10000"),
-                rev_ytd=Decimal("0"),
                 exp_ytd=Decimal("3500"),
-                calendar_pct=33.3,
             )
             == "On track"
         )
 
-    def test_expenditure_only_significantly_ahead_of_pace_flags(self) -> None:
-        """An exp-only program 60% spent at calendar 33% — outside ±15%
-        band, exp ahead by 27pp → status escalates."""
+    def test_expenditure_only_above_threshold_flags(self) -> None:
+        """Round 56: an exp-only program 110% spent → over the 101%
+        threshold by $9K (10K below the $25K Significant cushion when
+        exp budget is $100K) → at minimum Slightly over."""
         from tools.sub_program.logic import compute_status_pill
 
         result = compute_status_pill(
-            available=Decimal("-60000"),
             annual_exp_budget=Decimal("100000"),
-            rev_ytd=Decimal("0"),
-            exp_ytd=Decimal("60000"),
-            calendar_pct=33.3,
+            exp_ytd=Decimal("110000"),
         )
         assert result in ("Slightly over", "Significant overspend", "Investigate urgently"), result
 
     def test_spent_without_budget_excludes_revenue_only_program(self) -> None:
-        """R1 fix: a fundraiser with rev_b > 0, exp_b = 0, exp_y > 0 is
-        NOT 'Spent without budget' — it's a cost-recovery program."""
+        """A fundraiser with rev_b > 0, exp_b = 0, exp_y > 0 is NOT
+        'Spent without budget' — it's a cost-recovery program. The gate
+        requires exp_b == 0 AND rev_b == 0 (and rev_ytd == 0)."""
         from tools.sub_program.logic import compute_status_pill
 
-        # The gate: must be exp_b == 0 AND rev_b == 0 to fire.
         assert (
             compute_status_pill(
-                available=Decimal("-2000"),  # spent more than collected
                 annual_exp_budget=Decimal("0"),
                 annual_rev_budget=Decimal("50000"),
                 rev_ytd=Decimal("30000"),
@@ -2007,12 +1996,11 @@ class TestF1Round1Fixes:
         )
 
     def test_spent_without_budget_fires_when_truly_unbudgeted(self) -> None:
-        """The hard case: $0 budget on both sides, $X spent."""
+        """The hard case: $0 budget on both sides, no revenue, $X spent."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("-454545"),
                 annual_exp_budget=Decimal("0"),
                 annual_rev_budget=Decimal("0"),
                 rev_ytd=Decimal("0"),
@@ -2158,19 +2146,16 @@ class TestF1Round1Fixes:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         status_cell = ws.cell(row=3, column=3)
-        assert status_cell.value == "No spend yet"
-        assert status_cell.font is not None
-        assert status_cell.font.bold is True
+        # Round 56: 'No spend yet' pill removed; budgeted-with-zero-spend
+        # rows now read as On track. The bold styling that emphasised
+        # the No-spend-yet pill no longer applies here.
+        assert status_cell.value == "On track"
 
     def test_xlsx_auto_fills_empty_comments_for_urgent_rows(self, tmp_path: Path) -> None:
         """R1 fix: when Status is Urgent / Significant / Spent-without-
-        budget / No-spend-yet AND Comments is empty, auto-fill so the
-        cell doesn't print as a contradiction.
-        R2 fix: differentiated by status — Urgent/Material/Spent
-        without budget get the imperative 'Action needed: add
-        commentary.' (signals BM has a to-do); No-spend-yet keeps
-        '(no commentary recorded)' (the absence IS the literal
-        point)."""
+        budget AND Comments is empty, auto-fill so the cell doesn't
+        print as a contradiction. Round 56 dropped the No-spend-yet
+        special case along with the pill itself."""
         rev = SubProgramLine(
             sub_program="7001",
             account="Revenue",
@@ -2226,112 +2211,88 @@ class TestF1Round1Fixes:
         assert action_back == ""
 
     def test_status_pill_boundary_overrun_exactly_5000(self) -> None:
-        """R1 boundary pin: overrun = $5,000 exact. ``< mat`` so this
-        falls past 'On track' and into the bucket logic; with budget
-        $50K the pct_over = 10% which is < both Material and Urgent
-        thresholds → 'Slightly over'."""
+        """Round 56 boundary pin: with default 101% threshold, $5,000
+        overrun on a $50K budget = 110% used = $4,500 past threshold.
+        That is below the $5K materiality dollar floor AND pct_over is
+        only 9 pp → falls back to On track via the materiality clause."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("-5000"),
                 annual_exp_budget=Decimal("50000"),
-                annual_rev_budget=Decimal("50000"),  # combined
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("5000"),
+                exp_ytd=Decimal("55000"),  # $4.5K past 101% threshold
             )
-            == "Slightly over"
+            == "On track"
         )
 
     def test_status_pill_boundary_overrun_exactly_25000(self) -> None:
-        """R1 boundary pin: at $25,000 exact, should NOT promote to
-        Significant (rule is ``> $25,000``, not ``>=``). pct_over =
-        25% with budget $100K — also exactly at the boundary, should
-        stay 'Slightly over'."""
+        """Round 56 boundary pin: $25,000 spend over the 101% threshold
+        on a $100K budget = $14K past threshold. With pct_over = 14 pp
+        (which is < the 25% Material percent floor) the dollar floor
+        ($25K Significant) governs — $14K overrun → Slightly over."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("-25000"),
                 annual_exp_budget=Decimal("100000"),
-                annual_rev_budget=Decimal("100000"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("25000"),
+                exp_ytd=Decimal("115000"),  # $14K past 101% threshold
             )
             == "Slightly over"
         )
 
-    def test_status_pill_boundary_overrun_just_above_25000(self) -> None:
-        """R1 boundary pin: $25,000.01 = Significant (just over)."""
+    def test_status_pill_boundary_overrun_just_above_25k_dollar_floor(self) -> None:
+        """Round 56 boundary pin: $26K past the 101% threshold trips
+        the $25K Material dollar floor → Significant overspend."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("-25000.01"),
-                annual_exp_budget=Decimal("100000"),
-                annual_rev_budget=Decimal("100000"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("25000.01"),
+                annual_exp_budget=Decimal("200000"),
+                exp_ytd=Decimal("228000"),  # $26K past 101% threshold ($202K)
             )
             == "Significant overspend"
         )
 
-    def test_status_pill_boundary_overrun_exactly_100000(self) -> None:
-        """R1 boundary pin: at $100,000 exact, should NOT promote to
-        Urgent (rule is ``> $100,000``). Material gate fires at the
-        $25K dollar threshold ($100K > $25K), so the value lands in
-        Significant overspend, NOT Urgent."""
+    def test_status_pill_boundary_overrun_exactly_100000_dollar_floor(self) -> None:
+        """Round 56 boundary pin: at $100,000 past the threshold the
+        rule is strictly ``>`` so this lands in Significant, not
+        Urgent. With $500K budget at 101% = $505K threshold, exp_ytd
+        $605K leaves $100K overrun → Significant (not yet Urgent)."""
         from tools.sub_program.logic import compute_status_pill
 
         result = compute_status_pill(
-            available=Decimal("-100000"),
             annual_exp_budget=Decimal("500000"),
-            annual_rev_budget=Decimal("500000"),
-            rev_ytd=Decimal("0"),
-            exp_ytd=Decimal("100000"),
+            exp_ytd=Decimal("605000"),  # exactly $100K past 101% threshold
         )
-        # $100K is NOT > $100K (strict >), so NOT Urgent. But $100K is
-        # > $25K Material dollar threshold → Significant overspend.
         assert result == "Significant overspend"
 
-    def test_status_pill_boundary_overrun_just_above_100000(self) -> None:
-        """R1 boundary pin: $100,000.01 = Urgent (just past)."""
+    def test_status_pill_boundary_overrun_just_above_100000_dollar_floor(self) -> None:
+        """Round 56 boundary pin: $101K past the threshold trips the
+        $100K Urgent dollar floor → Investigate urgently."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("-100000.01"),
                 annual_exp_budget=Decimal("500000"),
-                annual_rev_budget=Decimal("500000"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("100000.01"),
+                exp_ytd=Decimal("606000"),  # $101K past 101% threshold
             )
             == "Investigate urgently"
         )
 
-    def test_status_pill_boundary_calendar_pct_25(self) -> None:
-        """R1 boundary pin: calendar_pct = 25.0 exact → On track (the
-        rule is ``> 25``, strictly above). 25.01 → No spend yet."""
+    def test_status_pill_threshold_at_exact_boundary_is_on_track(self) -> None:
+        """Round 56 boundary pin: used_pct = threshold exactly → On
+        track (the rule is ``used_pct > threshold``, strictly above)."""
         from tools.sub_program.logic import compute_status_pill
 
-        on_25 = compute_status_pill(
-            available=Decimal("10000"),
-            annual_exp_budget=Decimal("10000"),
-            annual_rev_budget=Decimal("10000"),
-            rev_ytd=Decimal("0"),
-            exp_ytd=Decimal("0"),
-            calendar_pct=25.0,
+        # exp_ytd = 101 K on $100K budget = exactly 101% → On track.
+        assert (
+            compute_status_pill(
+                annual_exp_budget=Decimal("100000"),
+                exp_ytd=Decimal("101000"),
+                expense_threshold=101.0,
+            )
+            == "On track"
         )
-        on_25_plus = compute_status_pill(
-            available=Decimal("10000"),
-            annual_exp_budget=Decimal("10000"),
-            annual_rev_budget=Decimal("10000"),
-            rev_ytd=Decimal("0"),
-            exp_ytd=Decimal("0"),
-            calendar_pct=25.01,
-        )
-        assert on_25 == "On track"
-        assert on_25_plus == "No spend yet"
 
 
 # ---------------------------------------------------------------------------
@@ -2398,7 +2359,6 @@ class TestF1Round2Fixes:
 
         assert (
             compute_status_pill(
-                available=Decimal("4000"),  # collected more than spent
                 annual_exp_budget=Decimal("0"),
                 annual_rev_budget=Decimal("0"),
                 rev_ytd=Decimal("5000"),  # rev collected — not unbudgeted
@@ -2407,122 +2367,72 @@ class TestF1Round2Fixes:
             != "Spent without budget"
         )
 
-    def test_donation_program_uses_pacing_path(self) -> None:
-        """R2 fix: ``is_expenditure_only`` no longer requires
-        ``rev_ytd == 0`` — a program with rev_b = 0 but rev_y > 0
-        (donations / unbudgeted grants) is still expenditure-pacing
-        analysed, not falling through to the raw available signal."""
+    def test_donation_program_under_threshold_is_on_track(self) -> None:
+        """Round 56: a program with rev_b = 0 but rev_y > 0 (donations /
+        unbudgeted grants) and exp_ytd within the threshold of the
+        annual exp budget reads as On track. The revenue side is
+        irrelevant to the threshold gate."""
         from tools.sub_program.logic import compute_status_pill
 
-        # Donation $5K received but program is on pace (33% spent at
-        # 33% calendar) — pacing path returns On track despite the
-        # $1.5K negative available reading from naive math.
+        # Donation $5K received, $3.5K spent of $10K exp budget = 35%.
+        # Within 101% threshold → On track.
         result = compute_status_pill(
-            available=Decimal("1500"),  # $5K rev - $3.5K exp
             annual_exp_budget=Decimal("10000"),
-            annual_rev_budget=Decimal("0"),  # unbudgeted donation
+            annual_rev_budget=Decimal("0"),
             rev_ytd=Decimal("5000"),
             exp_ytd=Decimal("3500"),
-            calendar_pct=33.3,
         )
         assert result == "On track"
 
-    def test_pacing_path_uses_committed_amount(self) -> None:
-        """R2 fix: pacing uses (exp_ytd + outstanding_orders), not just
-        exp_ytd. The Admin-style sub-program ($192K spent + $1.7M orders
-        on $582K budget, $26K incidental rev) reads as 3.3× committed
-        — way beyond the ±15% pacing band → Investigate urgently.
-        Without this fix, pacing would say 33% = on calendar = On
-        track, hiding $1.7M of unfunded orders."""
+    def test_admin_scale_overrun_triggers_urgent(self) -> None:
+        """Round 56: the Admin-style sub-program with $700K spend on a
+        $582K budget (≈120%) lands $112K past the 101% threshold,
+        well over the $100K Urgent dollar floor."""
         from tools.sub_program.logic import compute_status_pill
 
-        # available = rev_y - exp_y - oo = 26436 - 192126 - 1732527
         result = compute_status_pill(
-            available=Decimal("-1898217"),
             annual_exp_budget=Decimal("581700"),
-            annual_rev_budget=Decimal("0"),  # admin = no rev budget
+            annual_rev_budget=Decimal("0"),
             rev_ytd=Decimal("26436"),
-            exp_ytd=Decimal("192126"),
-            calendar_pct=33.3,
+            exp_ytd=Decimal("700000"),
         )
-        # Committed = rev_ytd - available = 26436 - (-1898217) = 1924653
-        # Pace = 1924653 / 581700 = 3.31 → way over
-        # Pace gap = +2.97 → outside ±15% band
-        # Overrun = 1924653 - (581700 * 0.333) = 1924653 - 193706 = ~$1.73M
-        # Pct over = 297% → Investigate urgently
         assert result == "Investigate urgently"
 
-    def test_no_spend_yet_uses_fractional_threshold(self) -> None:
-        """R2 fix: ``No spend yet`` gate is now ``exp_ytd < min(mat,
-        5% of budget)`` — captures the trickle case ($100 on $50K)
-        without false-positives on small-budget normal-pacing programs
-        ($3,500 on $10K).
-        """
-        from tools.sub_program.logic import compute_status_pill
-
-        # Trickle case: $100 on $50K at 33% — pace = 0.2%, vastly
-        # under-paced. spend_threshold = min($5K, $50K * 0.05) = $2.5K.
-        # $100 < $2.5K → No spend yet.
-        trickle = compute_status_pill(
-            available=Decimal("-100"),
-            annual_exp_budget=Decimal("50000"),
-            annual_rev_budget=Decimal("0"),
-            rev_ytd=Decimal("0"),
-            exp_ytd=Decimal("100"),
-            calendar_pct=33.3,
-        )
-        assert trickle == "No spend yet"
-        # Normal small-budget case: $3500 on $10K at 33% — pace = 35%,
-        # within ±15% pacing band. spend_threshold = min($5K, $500) =
-        # $500. $3500 > $500 → does NOT fire No spend yet.
-        normal = compute_status_pill(
-            available=Decimal("-3500"),
-            annual_exp_budget=Decimal("10000"),
-            annual_rev_budget=Decimal("0"),
-            rev_ytd=Decimal("0"),
-            exp_ytd=Decimal("3500"),
-            calendar_pct=33.3,
-        )
-        assert normal == "On track"
-
     def test_noise_floor_500_dollars(self) -> None:
-        """R2 fix: hard $500 noise floor regardless of percent. A $50
-        overrun on a $30 stationery budget = 167% over but $50 absolute
-        — chart-of-accounts placeholder, not council attention."""
+        """Round 56: hard $500 noise floor regardless of percent past
+        the threshold. With a $1K budget at 101% threshold ($1,010), a
+        $1.4K spend = $390 past threshold, below the $500 noise floor
+        → On track despite the ~40% pct_over."""
         from tools.sub_program.logic import compute_status_pill
 
         assert (
             compute_status_pill(
-                available=Decimal("-50"),
-                annual_exp_budget=Decimal("30"),
-                rev_ytd=Decimal("0"),
-                exp_ytd=Decimal("80"),
+                annual_exp_budget=Decimal("1000"),
+                exp_ytd=Decimal("1400"),  # $390 past threshold
             )
             == "On track"
         )
 
     def test_percent_floor_above_50pct(self) -> None:
-        """R2 fix: percent floor — overrun > 50% of budget surfaces
-        even if dollar < $5K materiality. A $4K overrun on a $200
-        budget is 2,000% over and IS material."""
+        """Round 56: percent floor — overrun > 50 pp past threshold
+        surfaces even if dollar overrun < $5K materiality. A $4K
+        overrun on a $200 budget is way more than 50% past threshold."""
         from tools.sub_program.logic import compute_status_pill
 
-        # Overrun $4K on $200 budget = 2,000%. Above $500 noise floor
-        # AND above 50% pct → escapes both floors → bucket logic.
-        # $4K < $25K Material dollar but pct > 50 → Urgent.
+        # $4,200 spend on $200 budget = 2100% used = ~1999 pp past 101%
+        # threshold. Overrun = $4,198, well above $500 noise floor and
+        # pct_over > 50 → Urgent (pct rule trips before dollar bucket).
         result = compute_status_pill(
-            available=Decimal("-4000"),
             annual_exp_budget=Decimal("200"),
-            rev_ytd=Decimal("0"),
             exp_ytd=Decimal("4200"),
         )
         assert result == "Investigate urgently"
 
-    def test_xlsx_no_spend_yet_uses_archival_message(self, tmp_path: Path) -> None:
-        """R2 fix: ``No spend yet`` keeps the archival ``(no commentary
-        recorded)`` auto-fill — the absence IS the literal point.
-        Other non-OK statuses get the imperative ``Action needed: add
-        commentary.``"""
+    def test_xlsx_zero_spend_renders_on_track(self, tmp_path: Path) -> None:
+        """Round 56: a sub-program with budget allocated but $0 YTD
+        spend reads as On track. The Comments cell is left empty for
+        On-track rows (auto-fill only runs for non-OK statuses to
+        avoid the 'urgent + blank comment' contradiction)."""
         rev = SubProgramLine(
             sub_program="8330",
             account="Revenue",
@@ -2545,15 +2455,13 @@ class TestF1Round2Fixes:
             faculty="Programs & Camps",
             is_over=False,
         )
-        out = tmp_path / "nospend_autofill.xlsx"
+        out = tmp_path / "zero_spend.xlsx"
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=3).value == "No spend yet"
-        # No-spend-yet keeps the parenthesised archival form because the
-        # absence of commentary IS the literal point — there's nothing
-        # for the BM to add.
-        assert ws.cell(row=3, column=14).value == "(no commentary recorded)"
+        assert ws.cell(row=3, column=3).value == "On track"
+        # On-track rows leave Comments empty — no contradiction to fix.
+        assert ws.cell(row=3, column=14).value is None
 
     def test_xlsx_comments_width_reduced_to_40_then_32(self, tmp_path: Path) -> None:
         """Round 53 R2 reduced Comments column 50 → 40. F2 R1 further
@@ -2978,18 +2886,19 @@ class TestF2WatchlistSheet:
 class TestF2Round1Fixes:
     """Targeted tests pinning the F2 R1 fixes."""
 
-    def test_compute_trend_uses_current_status_for_pacing_aware_rows(self) -> None:
-        """R1 fix: when ``current_status`` is supplied, it gates the
+    def test_compute_trend_uses_current_status_for_threshold_rows(self) -> None:
+        """When ``current_status`` is supplied, it gates the
         "current_over" decision instead of the raw available signal.
         Prevents the contradictory "Status: On track | Trend:
-        Worsening" pairing on Expenditure-only programs whose Status
-        uses pacing-aware compare."""
+        Worsening" pairing on rows whose Status comes from the
+        Round-56 threshold-based pill."""
         from tools.sub_program.logic import compute_trend
 
-        # available is deeply negative but Status says On track (pacing-OK).
-        # Without status gating, this would fire Worsening (both over,
-        # delta > mat). With status gating, current_over=False so
-        # the trend says Resolved (prior was over, current isn't).
+        # available is deeply negative but Status says On track (under
+        # the expense threshold). Without status gating, this would fire
+        # Worsening (both over, delta > mat). With status gating,
+        # current_over=False so the trend says Resolved (prior was over,
+        # current isn't).
         assert (
             compute_trend(
                 current_available=Decimal("-50000"),
@@ -3003,22 +2912,20 @@ class TestF2Round1Fixes:
     def test_compute_trend_status_off_track_overrides_available_signal(
         self,
     ) -> None:
-        """R1 fix: a row whose Status is non-OK but available appears
-        on-track via raw signal still fires Trend correctly."""
+        """A row whose Status is non-OK but available appears on-track
+        via raw signal still fires Trend correctly."""
         from tools.sub_program.logic import compute_trend
 
-        # available > 0 but status != On track (e.g. No spend yet
-        # carrying a positive available equal to budget).
+        # available > 0 (positive surplus look) but status is non-OK
+        # (e.g. Spent without budget despite a near-zero net).
         result = compute_trend(
             current_available=Decimal("10000"),
             prior_available=Decimal("8000"),
-            current_status="No spend yet",
+            current_status="Spent without budget",
             materiality_dollar=5000,
         )
-        # Both periods register as off-track via status (current_over)
-        # and via raw signal (prior_over from Decimal("-30000")? wait
-        # prior here is +$8K so prior_over=False). current_over=True
-        # (status != On track), prior_over=False → Newly off track.
+        # current_over=True (status != On track), prior_over=False →
+        # Newly off track.
         assert result == "Newly off track"
 
     def test_load_prior_period_ytd_skips_watchlist_sheet(self, tmp_path: Path) -> None:
@@ -3192,10 +3099,11 @@ class TestF2Round1Fixes:
         # Comments at col 14 = letter "N".
         assert ws.column_dimensions["N"].width == 32
 
-    def test_watchlist_sort_separates_underspend_from_overspend(self, tmp_path: Path) -> None:
-        """R1 fix: signed available ascending puts overspends first,
-        underspends last. A $200K overspend tops the list; a $200K
-        unspent No-spend-yet program lands at the bottom."""
+    def test_watchlist_excludes_unspent_programs(self, tmp_path: Path) -> None:
+        """Round 56: the Watchlist is strictly an over-budget list. A
+        budgeted-but-unspent program no longer appears on the Watchlist
+        (the calendar-based 'No spend yet' pill was retired with the
+        pacing logic). Only the overspend row 7001 surfaces here."""
         out = tmp_path / "signed_sort.xlsx"
         # Big overspend
         over_rev = SubProgramLine(
@@ -3220,7 +3128,7 @@ class TestF2Round1Fixes:
             faculty="X",
             is_over=True,
         )
-        # Big unspent (No spend yet)
+        # Big unspent — was 'No spend yet' pre-R56, now reads as On track.
         unspent_rev = SubProgramLine(
             sub_program="8330",
             account="Revenue",
@@ -3255,9 +3163,10 @@ class TestF2Round1Fixes:
             v = ws.cell(row=r, column=1).value
             if v is not None:
                 codes.append(str(v))
-        # 7001 (overspend, available -$200K) comes BEFORE 8330
-        # (No spend yet, available +$200K).
-        assert codes.index("7001") < codes.index("8330")
+        # 7001 (overspend) appears; 8330 (unspent) does not — Round 56
+        # narrowed the Watchlist to over-budget rows only.
+        assert "7001" in codes
+        assert "8330" not in codes
 
 
 # ---------------------------------------------------------------------------

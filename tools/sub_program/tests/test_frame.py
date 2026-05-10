@@ -230,8 +230,8 @@ class TestRunHappyPath:
             )
         assert result.table_columns is not None
         keys = [col["key"] for col in result.table_columns]
-        # Round 45 Phase A — variance + pacing replace remaining + used_pct
-        # as the headline numerics.
+        # Round 45 Phase A — variance replaces remaining + used_pct as
+        # the headline numerics. Round 56 dropped the pacing column.
         assert keys == [
             "sub_program",
             "account",
@@ -240,7 +240,6 @@ class TestRunHappyPath:
             "ytd",
             "variance_amount",
             "variance_pct",
-            "pacing",
         ]
 
     def test_output_path_set(self, tmp_path: Path) -> None:
@@ -995,13 +994,13 @@ class TestRound22aInlineCommentary:
         assert "💬" in sub_row["description"]
         assert "Reviewed by council" in sub_row["description"]
         # Numeric columns blanked so the sub-row isn't read as data.
-        # Round 45 Phase A — used_pct + remaining replaced by variance +
-        # pacing on the headline; comment sub-rows blank all of them.
+        # Round 45 Phase A — used_pct + remaining replaced by variance
+        # on the headline. Round 56 dropped the pacing column entirely;
+        # comment sub-rows blank all the remaining numeric columns.
         assert sub_row["budget"] == ""
         assert sub_row["ytd"] == ""
         assert sub_row["variance_amount"] == ""
         assert sub_row["variance_pct"] == ""
-        assert sub_row["pacing"] == ""
         # Faculty inheritance — keeps the rail filter grouping intact.
         assert sub_row["_faculty"] == "Curriculum"
 

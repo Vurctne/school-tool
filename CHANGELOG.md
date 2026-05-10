@@ -5,6 +5,41 @@ is at the top.
 
 ---
 
+## v2.4.12.0 — May 2026
+
+* **Sub-Program Budget Report — pacing logic dropped.** All calendar-
+  awareness has been removed from the Status pill. Previously the pill
+  compared YTD spend against the calendar fraction of the year (e.g.
+  "33% spent at end of April"); a sub-program flagged `No spend yet`
+  if the calendar was past 25% but the budget hadn't moved. The new
+  rule is a straight threshold compare: `exp_ytd > expense_threshold%
+  × annual_exp_budget`. Sub-programs whose Expense YTD exceeds the
+  threshold (default 101%) are flagged via the same dollar/percent
+  bucketing as before — Slightly over / Significant overspend /
+  Investigate urgently — but no longer get a calendar-aware free pass
+  early in the year, and budgeted-but-unspent rows no longer light up
+  late in the year.
+* **`No spend yet` pill removed.** The pill depended on calendar
+  awareness, which is gone. Budgeted programs with $0 YTD now read as
+  `On track`; the YTD column itself conveys the absence of spend.
+* **Watchlist narrowed to over-budget only.** The in-app Watchlist tab
+  previously also included rows whose pacing exceeded 110% of calendar.
+  With pacing gone, the Watchlist is strictly an over-budget list —
+  rows whose Status is non-OK (Slightly over / Significant overspend /
+  Investigate urgently / Spent without budget).
+* **Pacing column + Pacing card + Watchlist card removed.** The
+  in-app table loses the Pacing column. The metric-card strip drops
+  the Pacing and Watchlist cards, leaving Sub-programs and YTD spend.
+  The faculty count is also dropped from the Sub-programs card (the
+  Faculty rail itself was removed in v2.4.11.0; the count was
+  redundant after that).
+* **Cleanups.** Removed `calendar_pct_from_period_label`,
+  `_PACING_WATCH_THRESHOLD`, `_fmt_pacing`, and the `pacing` field on
+  `SubProgramLine`. `compute_status_pill` lost its `available` and
+  `calendar_pct` parameters in the redesign.
+
+---
+
 ## v2.4.11.0 — May 2026
 
 * **Sub-Program Budget Report — UI simplification.** The in-app

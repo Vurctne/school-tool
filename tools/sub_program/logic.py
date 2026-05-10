@@ -218,170 +218,94 @@ def decode_commentary(text: str) -> tuple[str, str, str, str]:
 
 _STATUS_ON_TRACK = "On track"
 _STATUS_SLIGHTLY_OVER = "Slightly over"
-# Round 53 F1 R1 fix: was "Material concern" (finance jargon).
-# Renamed to plain English so a non-finance reader parses it correctly.
 _STATUS_MATERIAL = "Significant overspend"
 _STATUS_URGENT = "Investigate urgently"
-_STATUS_NO_SPEND_YET = "No spend yet"
 _STATUS_SPENT_WITHOUT_BUDGET = "Spent without budget"
 
+# Round 56 — "No spend yet" pill dropped along with all calendar-
+# pacing judgements. Status now reflects only over-budget concerns.
 _STATUS_VALUES: tuple[str, ...] = (
     _STATUS_ON_TRACK,
     _STATUS_SLIGHTLY_OVER,
     _STATUS_MATERIAL,
     _STATUS_URGENT,
-    _STATUS_NO_SPEND_YET,
     _STATUS_SPENT_WITHOUT_BUDGET,
 )
 
 # Bucket boundaries for overrun magnitude. Both dollar AND percent
 # triggers fire — whichever is larger picks the bucket. This matches
-# the variance-analysis skill's "either exceeded" rule for materiality.
+# the variance-analysis skill's "either exceeded" rule.
 _STATUS_URGENT_DOLLAR = Decimal("100000")
 _STATUS_URGENT_PCT = Decimal("50")
 _STATUS_MATERIAL_DOLLAR = Decimal("25000")
 _STATUS_MATERIAL_PCT = Decimal("25")
 
-# "No spend yet" only fires when we're past 25% of the year — earlier
-# than that, an empty YTD on a budgeted line is normal seasonal flow.
-_NO_SPEND_CALENDAR_THRESHOLD = 25.0
-
 
 def compute_status_pill(
     *,
-    available: Decimal,
     annual_exp_budget: Decimal,
-    rev_ytd: Decimal,
     exp_ytd: Decimal,
     annual_rev_budget: Decimal = Decimal("0"),
+    rev_ytd: Decimal = Decimal("0"),
+    expense_threshold: float = 101.0,
     materiality_dollar: int = 5000,
-    calendar_pct: float = 0.0,
 ) -> str:
-    """Return a plain-English status pill for one sub-program row.
+    """Return a plain-English Status pill for one sub-program.
 
-    ``available`` is the signed YTD net position (rev_ytd + carry-forward
-    − exp_ytd − outstanding_orders, mirrors the XLSX writer's calc).
-    Positive = surplus / under-spend; negative = over-drawn.
+    Round 56 redesign — pacing-free contract:
 
-    Pill picks (first match wins):
+    * Over-budget gate: ``exp_ytd > expense_threshold% × annual_exp_budget``.
+      The threshold is the same Expense over-budget slider the user
+      sets (default 101%). Sub-programs whose Expense YTD exceeds
+      that fraction of the annual expense budget are flagged.
+    * ``Spent without budget`` — truly unbudgeted spend: zero budget
+      on BOTH sides, no revenue collected, but expenditure occurred.
+      Capital-spend-without-council-approval flag.
+    * ``On track`` — used_pct ≤ threshold, OR overrun below the
+      materiality floor (both dollar and percent).
+    * Bucket above materiality:
+        * ``Investigate urgently`` — overrun > $100K OR > 50% past threshold.
+        * ``Significant overspend`` — $25K–$100K OR 25–50% past threshold.
+        * ``Slightly over`` — anything else past materiality.
 
-    * ``Spent without budget`` — TRULY unbudgeted capital spend:
-      ``annual_exp_budget == 0 AND annual_rev_budget == 0 AND exp_ytd > 0``.
-      The R1-fix-tightened gate excludes fundraising programs that
-      have a revenue budget but no expenditure budget (cost-recovery
-      style), which would otherwise mis-fire here.
-    * ``No spend yet`` — annual exp budget > materiality_dollar AND
-      both exp_ytd == 0 AND rev_ytd == 0 AND calendar past 25%. A
-      council member would ask "shouldn't this be funded by now?".
-    * ``On track`` — for combined programs (both rev_b and exp_b > 0):
-      surplus, OR overrun below the materiality dollar floor.
-      For expenditure-only programs (no revenue side): R1 fix uses a
-      pacing-aware compare — pacing within ±15% of calendar is on
-      track. Without this, a 50%-spent line in April (calendar 33%)
-      would mis-classify as Material via the raw available signal.
-    * ``Investigate urgently`` — overrun > $100K OR > 50% of budget.
-    * ``Significant overspend`` — overrun $25K–$100K OR 25–50% of
-      budget. (Renamed from the R0 "Material concern" — was finance
-      jargon to a non-finance reader.)
-    * ``Slightly over`` — anything else past the materiality floor.
+    Round 56 dropped from the prior contract:
+
+    * ``available`` parameter (and the surplus / over-drawn signal
+      derived from it) — expense vs threshold replaces it.
+    * ``calendar_pct`` parameter (and the pacing-aware Expenditure-
+      only branch) — pacing semantics removed entirely.
+    * ``No spend yet`` pill — depended on calendar.
     """
     mat = Decimal(str(materiality_dollar))
 
-    # Spent without budget — capital-spend-without-approval flag.
-    # R1 fix: tightened gate — must have NO budget on either side.
-    # A fundraiser with rev_b > 0, exp_b == 0 is NOT unbudgeted.
-    # R2 fix: also require ``rev_ytd == 0``. A program collecting
-    # revenue but with zero budget on either side is a configuration
-    # mistake (someone forgot to add the budget) — surfacing it as
-    # "Spent without budget" alongside its visible revenue collection
-    # reads as contradictory to a council member.
+    # Spent without budget — truly unbudgeted spend.
     if annual_exp_budget == 0 and annual_rev_budget == 0 and rev_ytd == 0 and exp_ytd > 0:
         return _STATUS_SPENT_WITHOUT_BUDGET
 
-    # No spend yet — placeholder past 25% of year.
-    # R2 fix: loosened the ``exp_ytd == 0`` strict gate to a fractional
-    # threshold capped at the dollar materiality floor — captures the
-    # trickle case (e.g. $100 spent on a $50K budget at 33% calendar)
-    # without false-positives on normally-paced small programs ($3,500
-    # on $10K at 33% calendar is healthy, not "no spend yet"). The
-    # threshold = min(materiality_dollar, 5% of annual_exp_budget).
-    spend_threshold = min(mat, annual_exp_budget * Decimal("0.05"))
-    if (
-        annual_exp_budget > mat
-        and exp_ytd < spend_threshold
-        and rev_ytd < spend_threshold
-        and calendar_pct > _NO_SPEND_CALENDAR_THRESHOLD
-    ):
-        return _STATUS_NO_SPEND_YET
-
-    # R1 fix: Expenditure-only sub-programs (no revenue side and no
-    # carry-forward) need a pacing-aware comparison. The raw
-    # ``available`` value is just ``-exp_ytd`` for these — it always
-    # reads as deficit, even when the program is perfectly on pace.
-    # We compare actual spend pace to calendar pace: if exp_ytd / eb
-    # is within ±15% of calendar_pct / 100, the line is on track.
-    # R2 fix: dropped the ``rev_ytd == 0`` requirement. A donation-
-    # funded program (rev_b == 0 but rev_ytd > 0) belongs in this
-    # branch too — its expenditure side is what we're pacing against.
-    is_expenditure_only = annual_rev_budget == 0 and annual_exp_budget > 0
-    if is_expenditure_only and calendar_pct > 0:
-        # R2 fix: pacing uses the COMMITTED amount (exp_ytd + outstanding
-        # orders), not just exp_ytd. Outstanding orders bind budget the
-        # same way actual spend does. Without this fix, an Admin-style
-        # row with $192K spent + $1.7M orders on a $582K budget reads
-        # as "33% of budget consumed" (matching calendar) and
-        # mis-classifies as "On track" — when in reality the program
-        # is committed to ~$1.9M of spend (3.3× budget). The committed
-        # amount is reconstructible without an extra parameter:
-        # committed = rev_ytd - available  (since available =
-        # rev_ytd - exp_ytd - oo, so oo + exp_ytd = rev_ytd - available).
-        committed = rev_ytd - available
-        actual_pace = committed / annual_exp_budget
-        expected_pace = Decimal(str(calendar_pct)) / Decimal("100")
-        pace_gap = actual_pace - expected_pace
-        # Within 15% pacing band -> on track. The 15% band gives a
-        # generous tolerance for chunky / front-loaded / back-loaded
-        # spending patterns common in school programs.
-        if abs(pace_gap) <= Decimal("0.15"):
-            return _STATUS_ON_TRACK
-        # Outside the band — fall through to the standard overrun
-        # logic but using exp_ytd-vs-budget as the overrun magnitude
-        # rather than the raw available signal.
-        if pace_gap > 0:
-            # Over-pacing.
-            overrun = committed - (annual_exp_budget * expected_pace)
-            pct_over = pace_gap * Decimal("100")
-            if overrun >= mat:
-                if overrun > _STATUS_URGENT_DOLLAR or pct_over > _STATUS_URGENT_PCT:
-                    return _STATUS_URGENT
-                if overrun > _STATUS_MATERIAL_DOLLAR or pct_over > _STATUS_MATERIAL_PCT:
-                    return _STATUS_MATERIAL
-                return _STATUS_SLIGHTLY_OVER
-        # Under-pacing — programs that haven't ramped up are on
-        # track for budget. (No status flag; council members would
-        # ask via the No-spend-yet trigger above for the extreme case.)
+    # No expense budget allocated and no spend → on track (chart-of-
+    # accounts placeholder, no decision to make).
+    if annual_exp_budget == 0:
         return _STATUS_ON_TRACK
 
-    # Surplus / on-pace — on track.
-    if available >= 0:
+    threshold = Decimal(str(expense_threshold))
+    used_pct = exp_ytd / annual_exp_budget * Decimal("100")
+    if used_pct <= threshold:
         return _STATUS_ON_TRACK
 
-    overrun = -available  # positive number
-    # R2 fix: hard $500 noise floor — chart-of-accounts placeholder
-    # rows ($50 over a $30 stationery budget = 167% over but $50
-    # absolute) are below council attention regardless of percent.
-    # This sits BELOW the regular dollar/percent floors: "below
-    # noise" wins.
+    # Over budget. Compute overrun in dollar AND in percent past the
+    # threshold so the materiality floor + bucketing logic can apply
+    # the variance-analysis skill's "either exceeded" rule.
+    threshold_dollars = annual_exp_budget * threshold / Decimal("100")
+    overrun = exp_ytd - threshold_dollars  # positive
+    pct_over = used_pct - threshold  # how many pp past threshold
+
+    # Hard $500 noise floor — chart-of-accounts placeholder rows
+    # below this magnitude are not council-grade attention.
     if overrun < Decimal("500"):
         return _STATUS_ON_TRACK
-    # Compute overrun as percent of expenditure budget once.
-    pct_over = (
-        (overrun / annual_exp_budget * Decimal("100")) if annual_exp_budget > 0 else Decimal("0")
-    )
-    # R2 fix: materiality floor now uses BOTH dollar AND percent (skill
-    # rule: "either exceeded"). A $4K overrun on a $200 budget = 2,000%
-    # over and IS material; a $5K overrun on a $50K budget = 10% over
-    # → below both floors → On track.
+
+    # Materiality floor — overrun below BOTH dollar and percent
+    # floors collapses back to On track.
     if overrun < mat and pct_over <= Decimal("50"):
         return _STATUS_ON_TRACK
 
@@ -879,29 +803,20 @@ class SubProgramLine:
     last_year_actual: Decimal = Decimal("0")
     last_year_budget: Decimal = Decimal("0")
     outstanding_orders: Decimal = Decimal("0")
-    # Round 45 Phase A — variance + pacing fields.
+    # Round 45 Phase A — variance fields. Round 56 dropped the
+    # ``pacing`` field per user direction (all pacing computations
+    # removed; calendar-aware judgements gone).
     #
-    # variance_amount: signed YTD - Budget. Positive means YTD has exceeded
-    # the annual budget. Sign is unconditional (same convention for Revenue
-    # and Expenditure rows); the UI renders positive Expense variance as
-    # red (over-spent) and negative Revenue variance as amber (under-
-    # collected) — i.e., colour comes from account-aware tinting at render
-    # time, not from the sign of this field.
+    # variance_amount: signed YTD - Budget. Positive means YTD has
+    # exceeded the annual budget. Sign is unconditional (same
+    # convention for Revenue and Expenditure rows).
     #
-    # variance_pct: variance_amount / budget * 100, also signed. Zero when
-    # budget is zero (we don't divide by zero — a zero-budget line with
-    # any spend is flagged via is_over and surfaced via materiality, not
-    # via percentage).
-    #
-    # pacing: used_pct / calendar_pct, expressed as a multiplier (1.00 =
-    # exactly on pace, 1.50 = 50% ahead of calendar). Zero when calendar_pct
-    # is zero or unknown — the UI then shows an em-dash.
+    # variance_pct: variance_amount / budget * 100, also signed. Zero
+    # when budget is zero.
     variance_amount: Decimal = Decimal("0")
     variance_pct: Decimal = Decimal("0")
-    pacing: Decimal = Decimal("0")
-    # Round 45 Phase A — materiality flag. True when |variance_amount| meets
-    # OR exceeds the materiality dollar floor for this run. Computed in
-    # generate_report (or _recompute_is_over for live-slider previews).
+    # Round 45 Phase A — materiality flag. True when |variance_amount|
+    # meets OR exceeds the materiality dollar floor for this run.
     is_material: bool = False
 
 
@@ -923,14 +838,8 @@ class ReportSummary:
     # (set in generate_report) so existing callers stay valid.
     revenue_threshold: float = 101.0
     expense_threshold: float = 101.0
-    # Round 45 Phase A — calendar pacing + dollar materiality.
-    # calendar_pct: float 0..100 — how far through the school year we are
-    # at the period end (e.g. April 2026 → 33.3 = 4/12). When zero, the
-    # tool couldn't infer a calendar position and pacing columns will
-    # show "—" rather than a misleading multiplier.
-    # materiality_dollar: int — variance dollars below this floor render
-    # muted instead of warn/danger. Default mirrors the input default.
-    calendar_pct: float = 0.0
+    # Round 45 Phase A — dollar materiality. Round 56 dropped the
+    # ``calendar_pct`` field along with all pacing-based judgements.
     materiality_dollar: int = 5000
 
 
@@ -1144,51 +1053,10 @@ def _extract_period_label(text: str) -> str:
     return ""
 
 
-# Round 45 Phase A — calendar position from period label.
-#
-# The CASES21 GL21157 export prints a footer date like "3 March 2026"; we use
-# the month name to compute "calendar percent" — what fraction of the
-# (calendar-) year has elapsed by the end of that month. This is the
-# denominator for the Pacing column (Used % / Calendar %).
-#
-# Why calendar year and not Victorian school year (Feb–Dec)? Because
-# CASES21 budgets are themselves struck on a calendar year (Jan–Dec — see
-# the "Annual budget" column header in the GL21157 export). January spend
-# counts against the same annual budget as December spend, so the natural
-# pacing denominator is months-elapsed / 12.
-_MONTH_TO_PCT: dict[str, float] = {
-    "january": 100 / 12,
-    "february": 200 / 12,
-    "march": 300 / 12,
-    "april": 400 / 12,
-    "may": 500 / 12,
-    "june": 600 / 12,
-    "july": 700 / 12,
-    "august": 800 / 12,
-    "september": 900 / 12,
-    "october": 1000 / 12,
-    "november": 1100 / 12,
-    "december": 100.0,
-}
-
-
-def calendar_pct_from_period_label(period_label: str) -> float:
-    """Return calendar-position percent (0..100) for a period label.
-
-    ``period_label`` looks like "March 2026" or "Apr 2026". We match on the
-    month token (case-insensitive, prefix-matched against full month names
-    so "Apr" → April → 400/12 = 33.33).
-
-    Returns 0.0 when no month is recognisable; callers use that as a
-    sentinel for "calendar position unknown — show pacing as em-dash".
-    """
-    if not period_label:
-        return 0.0
-    for token in period_label.lower().split():
-        for full_name, pct in _MONTH_TO_PCT.items():
-            if full_name.startswith(token):
-                return pct
-    return 0.0
+# Round 56 — ``calendar_pct_from_period_label`` and the
+# ``_MONTH_TO_PCT`` table dropped along with all pacing-based
+# judgements. The period label is still extracted (for the report
+# header) but no longer drives any classification.
 
 
 # ---------------------------------------------------------------------------
@@ -1571,46 +1439,33 @@ def _recompute_is_over(
     *,
     revenue_threshold: float | None = None,
     expense_threshold: float | None = None,
-    calendar_pct: float = 0.0,
     materiality_dollar: int = 5000,
 ) -> list[SubProgramLine]:
-    """Return new SubProgramLine list with is_over + variance + pacing recomputed.
+    """Return new SubProgramLine list with is_over + variance + materiality
+    recomputed.
 
-    By default both Revenue and Expenditure rows use the same ``threshold``,
-    which preserves backward compatibility with all earlier callers.
-    Round 21 added the optional ``revenue_threshold`` / ``expense_threshold``
-    keyword-only parameters.  When supplied, a Revenue line is flagged as
-    over-budget if ``used_pct > revenue_threshold`` and an Expenditure line
-    if ``used_pct > expense_threshold``.
+    Round 21 added optional ``revenue_threshold`` / ``expense_threshold``
+    keyword-only params: a Revenue line is over-budget if
+    ``used_pct > revenue_threshold``, Expenditure if
+    ``used_pct > expense_threshold``.
 
     Round 45 Phase A also (re)computes:
 
-    * ``variance_amount = ytd - budget`` — signed; positive means YTD has
-      exceeded the annual budget. Same sign for Revenue and Expense rows;
-      account-aware tinting at render time differentiates "over-spent" red
-      from "under-collected" amber.
-    * ``variance_pct = variance_amount / budget * 100`` — signed; zero
-      when budget is zero.
-    * ``pacing = used_pct / calendar_pct`` — multiplier; 1.00 = on pace.
-      Zero when ``calendar_pct`` is zero (period unknown) so the UI can
-      render an em-dash.
+    * ``variance_amount = ytd - budget`` — signed.
+    * ``variance_pct = variance_amount / budget * 100`` — signed.
     * ``is_material`` — True when ``abs(variance_amount) >= materiality_dollar``.
-      Lines below the floor still flag over-budget by percentage but render
-      muted in the UI so they don't compete for attention with the genuinely
-      large variances.
+
+    Round 56 dropped the ``calendar_pct`` parameter and the ``pacing``
+    field along with all pacing-based judgements.
     """
     from dataclasses import replace as _replace
 
     rev_th = revenue_threshold if revenue_threshold is not None else threshold
     exp_th = expense_threshold if expense_threshold is not None else threshold
-    cal = Decimal(str(calendar_pct)) if calendar_pct > 0 else Decimal("0")
     mat = Decimal(str(materiality_dollar))
 
     result: list[SubProgramLine] = []
     for ln in lines:
-        # Pick the threshold by section.  Account values are always
-        # "Revenue" or "Expenditure" (or close variants) — we lower-case
-        # and compare prefixes to be tolerant of typos.
         is_revenue = ln.account.lower().startswith("revenue")
         section_th = rev_th if is_revenue else exp_th
         # Round 47 — a sub-program with $0 budget but $X spent has
@@ -1626,7 +1481,6 @@ def _recompute_is_over(
             if ln.budget != Decimal("0")
             else Decimal("0")
         )
-        new_pacing = (ln.used_pct / cal) if cal > 0 else Decimal("0")
         new_is_material = abs(new_variance_amount) >= mat
 
         ln = _replace(
@@ -1634,7 +1488,6 @@ def _recompute_is_over(
             is_over=new_is_over,
             variance_amount=new_variance_amount,
             variance_pct=new_variance_pct,
-            pacing=new_pacing,
             is_material=new_is_material,
         )
         result.append(ln)
@@ -1917,7 +1770,6 @@ def _write_monthly_sub_program_sheet(
     # descending (largest concerns first — variance-analysis skill
     # rule for investigation priority).
     if filter_to_non_ok or sort_by_variance_desc:
-        cal_pct = calendar_pct_from_period_label(period_label)
         annotated: list[tuple[str, Decimal, str]] = []  # (sp, available, status)
         for sp in sub_programs:
             ry = rev_y.get(sp, Decimal("0"))
@@ -1927,13 +1779,11 @@ def _write_monthly_sub_program_sheet(
             oo = orders.get(sp, Decimal("0"))
             avail = ry - ey - oo
             status = compute_status_pill(
-                available=avail,
                 annual_exp_budget=eb,
+                exp_ytd=ey,
                 annual_rev_budget=rb,
                 rev_ytd=ry,
-                exp_ytd=ey,
                 materiality_dollar=materiality_dollar,
-                calendar_pct=cal_pct,
             )
             annotated.append((sp, avail, status))
         if filter_to_non_ok:
@@ -2087,29 +1937,26 @@ def _write_monthly_sub_program_sheet(
         # sub-program plain-English summary computed from the same
         # available-balance value the Available Balance YTD column
         # carries, so the pill and the dollar number always tell the
-        # same story. R1 fix: also pass annual_rev_budget so the
-        # Spent-without-budget gate can distinguish capital-spend-
-        # without-approval from rev-only / cost-recovery programs.
+        # Round 56: pacing-free contract. compute_status_pill gates on
+        # ``exp_ytd > expense_threshold% × annual_exp_budget`` rather
+        # than the Available Balance signal. The expense_threshold
+        # default (101%) matches the user's slider default.
         status = compute_status_pill(
-            available=available,
             annual_exp_budget=eb,
+            exp_ytd=ey,
             annual_rev_budget=rb,
             rev_ytd=ry,
-            exp_ytd=ey,
             materiality_dollar=materiality_dollar,
-            calendar_pct=calendar_pct_from_period_label(period_label),
         )
         # F2: Status moves from col 13 to col 3 (after PROGRAM NAME).
         status_cell = ws.cell(row=row_idx, column=3, value=status)
         # Bold the call-for-attention pills (Urgent / Significant /
-        # Spent-without-budget / No-spend-yet) so they stand out on
-        # the printed page. R1 fix added No-spend-yet to the bold set
-        # — it's the row a council member would ask about.
+        # Spent-without-budget) so they stand out on the printed page.
+        # Round 56: dropped No-spend-yet from this set (pill removed).
         if status in (
             _STATUS_URGENT,
             _STATUS_MATERIAL,
             _STATUS_SPENT_WITHOUT_BUDGET,
-            _STATUS_NO_SPEND_YET,
         ):
             status_cell.font = Font(bold=True)
 
@@ -2157,19 +2004,13 @@ def _write_monthly_sub_program_sheet(
             _STATUS_URGENT,
             _STATUS_MATERIAL,
             _STATUS_SPENT_WITHOUT_BUDGET,
-            _STATUS_NO_SPEND_YET,
         ):
-            # R2 fix: differentiate the auto-fill text by status. A
-            # parenthesised "(no commentary recorded)" reads as
-            # archival absence to a council reader — passive, system-
-            # noted. For genuinely-attention statuses we want an
-            # imperative cue that the BM has a to-do. ``No spend yet``
-            # is left as the parenthesised form because the absence
-            # IS the literal point (the program hasn't transacted).
-            if status == _STATUS_NO_SPEND_YET:
-                prose = "(no commentary recorded)"
-            else:
-                prose = "Action needed: add commentary."
+            # R2 fix: imperative cue for attention statuses so the
+            # cell doesn't print as a contradiction (urgent status
+            # with blank Comments looks like the BM ignored the
+            # alert). Round 56 dropped the No-spend-yet special-case
+            # (the pill itself was removed).
+            prose = "Action needed: add commentary."
         # Defensive Excel-formula-injection guard. A user typing
         # ``=SUM(...)`` etc. into Notes would otherwise get
         # auto-evaluated by Excel on file open, surfacing as ``#NAME?``
@@ -2494,16 +2335,13 @@ def generate_report(
             )
         final_lines.append(ln)
 
-    # Round 45 Phase A - calendar pacing: derive % of year elapsed from the
-    # period label (e.g. "April 2026" -> 33.3) so Pacing column has a denom.
-    calendar_pct = calendar_pct_from_period_label(period_label)
-
+    # Round 56: pacing dropped — _recompute_is_over no longer takes
+    # calendar_pct. used_pct vs threshold is the sole over-budget gate.
     final_lines = _recompute_is_over(
         final_lines,
         over_budget_threshold,
         revenue_threshold=rev_th,
         expense_threshold=exp_th,
-        calendar_pct=calendar_pct,
         materiality_dollar=materiality_dollar,
     )
 
@@ -2554,6 +2392,5 @@ def generate_report(
         over_budget_threshold=over_budget_threshold,
         revenue_threshold=revenue_threshold or over_budget_threshold,
         expense_threshold=expense_threshold or over_budget_threshold,
-        calendar_pct=calendar_pct,
         materiality_dollar=materiality_dollar,
     )
