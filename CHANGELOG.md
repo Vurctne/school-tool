@@ -5,7 +5,7 @@ is at the top.
 
 ---
 
-## v2.4.0.0 — May 2026
+## v2.4.10.0 — May 2026
 
 * **Sub-Program Budget Report — Trend column + Watchlist sheet.**
   The XLSX output's main sheet now leads with Status (col 3) and
