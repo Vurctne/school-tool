@@ -1169,7 +1169,11 @@ class TestStructuredCommentaryXlsxOutput:
             commentary_action=action,
         )
 
-    def test_xlsx_comments_cell_carries_structured_prefix(self, tmp_path: Path) -> None:
+    def test_xlsx_comments_cell_renders_prose_form(self, tmp_path: Path) -> None:
+        """Round 53 F1 (Move E): the visible cell is plain-English prose,
+        not the bracketed prefix. The prefix encoding survives only in
+        the in-memory ``encode_commentary`` helper for prior-period
+        files written by R51 (those round-trip via ``decode_commentary``)."""
         out = tmp_path / "out.xlsx"
         lines = [
             self._line(
@@ -1185,9 +1189,8 @@ class TestStructuredCommentaryXlsxOutput:
         ws = wb["Sub Program Report"]
         # Header is rows 1-2, data starts row 3. Comments is column 12.
         cell = ws.cell(row=3, column=12).value
-        # Round 1 fix: separator is now newline so wrap_text renders
-        # notes on their own visual line in the XLSX.
-        assert cell == "[Driver: Ongoing | Action: Monitor]\nReviewed by council"
+        # R1 fix: prose now uses period+capital splits instead of em-dash.
+        assert cell == "Ongoing variance. Being monitored. Reviewed by council."
 
     def test_xlsx_comments_cell_blank_when_all_fields_blank(self, tmp_path: Path) -> None:
         out = tmp_path / "out.xlsx"
@@ -1200,16 +1203,19 @@ class TestStructuredCommentaryXlsxOutput:
         # Empty cell renders as None or "" depending on openpyxl version.
         assert cell in (None, "")
 
-    def test_xlsx_comments_cell_notes_only_no_prefix(self, tmp_path: Path) -> None:
-        """When only the freeform notes is set, the cell is plain text
-        (no prefix) — preserves pre-Phase-D readability."""
+    def test_xlsx_comments_cell_notes_only_renders_with_terminal_period(
+        self, tmp_path: Path
+    ) -> None:
+        """Round 53 F1: notes-only cells get a terminal period from the
+        prose renderer's ``_ensure_terminal_period`` helper. Council
+        readers see a complete sentence, not a fragment."""
         out = tmp_path / "out.xlsx"
         lines = [self._line("4001", notes="Reviewed by council")]
         _write_xlsx(lines, out, period_label="Apr 2026")
 
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=12).value == "Reviewed by council"
+        assert ws.cell(row=3, column=12).value == "Reviewed by council."
 
 
 # ---------------------------------------------------------------------------
@@ -1315,8 +1321,10 @@ class TestStructuredCommentaryRound1Fixes:
         ws = wb["Sub Program Report"]
         cell = ws.cell(row=3, column=12).value
         # Cell carries row A's notes only (row A came first), NOT a
-        # fabricated "[Action: Investigate]\nrow A note" combination.
-        assert cell == "row A note"
+        # fabricated "Needs investigation. Row A note." combination
+        # mixing row B's Action with row A's notes. Round 53 F1:
+        # rendered as prose with leading capital + terminal period.
+        assert cell == "Row A note."
 
     def test_xlsx_formula_injection_guard_prepends_apostrophe(self, tmp_path: Path) -> None:
         """A user typing '=SUM(D3:E3) outdated' into Notes must NOT
@@ -1339,7 +1347,8 @@ class TestStructuredCommentaryRound1Fixes:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         cell = ws.cell(row=3, column=12)
-        assert cell.value == "'=SUM(D3:E3) outdated"
+        # Round 53 F1: prose renderer adds a terminal period.
+        assert cell.value == "'=SUM(D3:E3) outdated."
         # Cell is text-formatted, not a formula.
         assert cell.data_type == "s"
         assert cell.number_format == "@"
@@ -1365,7 +1374,8 @@ class TestStructuredCommentaryRound1Fixes:
             wb = openpyxl.load_workbook(out, data_only=True)
             ws = wb["Sub Program Report"]
             cell = ws.cell(row=3, column=12)
-            assert cell.value == f"'{sigil}danger", f"sigil {sigil!r} should be guarded"
+            # Round 53 F1: prose renderer adds a terminal period.
+            assert cell.value == f"'{sigil}danger.", f"sigil {sigil!r} should be guarded"
 
     def test_load_prior_period_strips_apostrophe_guard(self, tmp_path: Path) -> None:
         """The reader strips the formula-guard apostrophe so
@@ -1381,3 +1391,939 @@ class TestStructuredCommentaryRound1Fixes:
 
         loaded = load_prior_period_comments(comments_path)
         assert loaded[("4001", "Curriculum")] == "=danger formula"
+
+
+# ---------------------------------------------------------------------------
+# Round 53 F1 — Status pills (Move B), prose commentary (Move E),
+# percent cap (Move F). TDD: tests written first.
+# ---------------------------------------------------------------------------
+
+
+class TestStatusPill:
+    """``compute_status_pill`` returns one of the canonical status strings."""
+
+    def test_status_values_tuple_has_designed_shape(self) -> None:
+        """Pin the status values so a stray edit can't silently drift.
+        R1 fix: 'Material concern' renamed to 'Significant overspend'
+        per UX critic — was finance jargon to a non-finance reader."""
+        from tools.sub_program.logic import _STATUS_VALUES
+
+        assert _STATUS_VALUES == (
+            "On track",
+            "Slightly over",
+            "Significant overspend",
+            "Investigate urgently",
+            "No spend yet",
+            "Spent without budget",
+        )
+
+    def test_on_track_when_available_balance_positive(self) -> None:
+        """Surplus / under-spend = on track."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("5000"),
+                annual_exp_budget=Decimal("10000"),
+                rev_ytd=Decimal("3000"),
+                exp_ytd=Decimal("2000"),
+            )
+            == "On track"
+        )
+
+    def test_on_track_when_overrun_below_materiality_floor(self) -> None:
+        """A $50 overrun on a $30 budget shouldn't ring alarm bells —
+        below the dollar materiality floor it reads as on track."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-50"),
+                annual_exp_budget=Decimal("30"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("80"),
+                materiality_dollar=5000,
+            )
+            == "On track"
+        )
+
+    def test_slightly_over_for_5k_to_25k_overrun(self) -> None:
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-12000"),  # $12K over
+                annual_exp_budget=Decimal("100000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("112000"),
+            )
+            == "Slightly over"
+        )
+
+    def test_significant_overspend_for_25k_to_100k_overrun(self) -> None:
+        """R1 fix: pill name changed from 'Material concern' to
+        'Significant overspend' (plain English)."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-50000"),  # $50K over
+                annual_exp_budget=Decimal("200000"),
+                annual_rev_budget=Decimal("200000"),  # combined program
+                rev_ytd=Decimal("150000"),
+                exp_ytd=Decimal("200000"),
+            )
+            == "Significant overspend"
+        )
+
+    def test_investigate_urgently_for_overrun_over_100k(self) -> None:
+        """Big dollar overrun = urgent regardless of percent."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-1342953"),  # the real KMAR Admin row
+                annual_exp_budget=Decimal("581700"),
+                rev_ytd=Decimal("26436"),
+                exp_ytd=Decimal("192126"),
+            )
+            == "Investigate urgently"
+        )
+
+    def test_investigate_urgently_for_overrun_over_50pct(self) -> None:
+        """Big PERCENT overrun = urgent even if dollar-small."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # $30K over a $20K budget = 150% — urgent
+        assert (
+            compute_status_pill(
+                available=Decimal("-30000"),
+                annual_exp_budget=Decimal("20000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("50000"),
+            )
+            == "Investigate urgently"
+        )
+
+    def test_no_spend_yet_when_budget_set_and_calendar_past_25pct(self) -> None:
+        """Sub-program with budget allocated but no movement past 25% of
+        the year — council members would ask 'shouldn't this be funded
+        by now?'."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("50000"),  # full budget still available
+                annual_exp_budget=Decimal("50000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("0"),
+                calendar_pct=33.3,  # April = 4/12
+            )
+            == "No spend yet"
+        )
+
+    def test_no_spend_yet_suppressed_when_calendar_under_25pct(self) -> None:
+        """Early in the year, 'no spend yet' is normal, not noteworthy."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("50000"),
+                annual_exp_budget=Decimal("50000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("0"),
+                calendar_pct=15.0,  # February
+            )
+            == "On track"
+        )
+
+    def test_no_spend_yet_suppressed_when_budget_below_materiality(self) -> None:
+        """A $30 budget with no spend isn't worth surfacing — it's the
+        same chart-of-accounts noise that the $50-over-$30 case hides."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("30"),
+                annual_exp_budget=Decimal("30"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("0"),
+                calendar_pct=33.3,
+                materiality_dollar=5000,
+            )
+            == "On track"
+        )
+
+    def test_spent_without_budget_when_budget_zero_and_ytd_nonzero(self) -> None:
+        """A sub-program with $0 annual budget but $X YTD spend —
+        capital spend without council approval, real category of finance
+        concern."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-454545"),
+                annual_exp_budget=Decimal("0"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("454545"),
+            )
+            == "Spent without budget"
+        )
+
+    def test_zero_zero_row_is_on_track_not_no_spend_yet(self) -> None:
+        """Placeholder row (no budget, no spend) — chart-of-accounts
+        noise. Not 'no spend yet' (which implies a budget exists)."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("0"),
+                annual_exp_budget=Decimal("0"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("0"),
+                calendar_pct=33.3,
+            )
+            == "On track"
+        )
+
+
+class TestCommentaryProse:
+    """``render_commentary_prose`` converts the structured triplet to
+    plain English for the XLSX cell."""
+
+    def test_all_blank_returns_empty(self) -> None:
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert render_commentary_prose() == ""
+
+    def test_notes_only_returns_notes_verbatim(self) -> None:
+        """Pre-Phase-D files (notes only) round-trip as is."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert render_commentary_prose(notes="Reviewed by council") == "Reviewed by council."
+
+    def test_notes_with_existing_terminal_punctuation(self) -> None:
+        """Don't double-period a sentence that already ends in . / ! / ?."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert render_commentary_prose(notes="Reviewed by council!") == "Reviewed by council!"
+
+    def test_action_only_no_notes(self) -> None:
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert render_commentary_prose(action="Investigate") == "Needs investigation."
+
+    def test_driver_action_combination(self) -> None:
+        """R1 fix: em-dash splice replaced with period+capital so two
+        short sentences read as natural English."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(driver="Ongoing", action="Monitor")
+            == "Ongoing variance. Being monitored."
+        )
+
+    def test_full_triplet_combination(self) -> None:
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(
+                driver="Ongoing",
+                outlook="Expected to continue",
+                action="Investigate",
+            )
+            == "Ongoing variance, expected to continue. Needs investigation."
+        )
+
+    def test_full_triplet_with_notes(self) -> None:
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(
+                notes="Reviewed by council",
+                driver="Ongoing",
+                outlook="Expected to continue",
+                action="Monitor",
+            )
+            == "Ongoing variance, expected to continue. Being monitored. Reviewed by council."
+        )
+
+    def test_action_none_literal_renders(self) -> None:
+        """Literal 'None' Action means 'reviewed, no action needed' —
+        distinct from blank, must render."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(action="None", notes="all good")
+            == "No action needed. All good."
+        )
+
+    def test_timing_drivers(self) -> None:
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert render_commentary_prose(driver="Timing-early") == "Spend earlier than planned."
+        assert render_commentary_prose(driver="Timing-late") == "Spend later than planned."
+
+    def test_outlook_only(self) -> None:
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert render_commentary_prose(outlook="Improving") == "Outlook improving."
+
+    def test_unknown_driver_value_falls_through_to_notes(self) -> None:
+        """Defensive — an unknown value (schema drift, hand edit) doesn't
+        crash; we render whatever notes we have, ignoring the unknown
+        structured field."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert render_commentary_prose(driver="FooBar", notes="some note") == "Some note."
+
+
+class TestPercentCap:
+    """``cap_percent_for_display`` clamps unbounded percents to ±999%
+    so a council reader sees a finite number."""
+
+    def test_none_passes_through(self) -> None:
+        from tools.sub_program.logic import cap_percent_for_display
+
+        assert cap_percent_for_display(None) is None
+
+    def test_value_within_range_unchanged(self) -> None:
+        from tools.sub_program.logic import cap_percent_for_display
+
+        # 0.65 stored = 65% rendered — well within range
+        assert cap_percent_for_display(Decimal("0.65")) == Decimal("0.65")
+
+    def test_negative_value_within_range_unchanged(self) -> None:
+        from tools.sub_program.logic import cap_percent_for_display
+
+        # -0.45 stored = -45% rendered — within range
+        assert cap_percent_for_display(Decimal("-0.45")) == Decimal("-0.45")
+
+    def test_positive_overflow_capped(self) -> None:
+        """The Mathematics row's 21.36 = 2,136% — cap to 999% (= 9.99)."""
+        from tools.sub_program.logic import cap_percent_for_display
+
+        assert cap_percent_for_display(Decimal("21.36")) == Decimal("9.99")
+
+    def test_negative_overflow_capped(self) -> None:
+        """An extreme over-spend like Admin's effective -230% — cap to
+        -999% (= -9.99)."""
+        from tools.sub_program.logic import cap_percent_for_display
+
+        assert cap_percent_for_display(Decimal("-50.0")) == Decimal("-9.99")
+
+    def test_exactly_at_boundary(self) -> None:
+        from tools.sub_program.logic import cap_percent_for_display
+
+        # Exactly 999% (= 9.99) is allowed
+        assert cap_percent_for_display(Decimal("9.99")) == Decimal("9.99")
+        assert cap_percent_for_display(Decimal("-9.99")) == Decimal("-9.99")
+
+    def test_just_over_boundary_is_capped(self) -> None:
+        from tools.sub_program.logic import cap_percent_for_display
+
+        assert cap_percent_for_display(Decimal("10.00")) == Decimal("9.99")
+
+
+class TestF1XlsxIntegration:
+    """End-to-end: F1 changes appear in the rendered XLSX correctly."""
+
+    def _line(
+        self,
+        sub_program: str = "4001",
+        account: str = "Expenditure",
+        budget: str = "10000",
+        ytd: str = "5000",
+        notes: str = "",
+        driver: str = "",
+        outlook: str = "",
+        action: str = "",
+    ) -> SubProgramLine:
+        b = Decimal(budget)
+        y = Decimal(ytd)
+        return SubProgramLine(
+            sub_program=sub_program,
+            account=account,
+            description=f"{sub_program} desc",
+            budget=b,
+            ytd=y,
+            remaining=b - y,
+            used_pct=(y / b * Decimal("100")) if b != 0 else Decimal("0"),
+            faculty="Curriculum",
+            is_over=False,
+            commentary=notes,
+            commentary_driver=driver,
+            commentary_outlook=outlook,
+            commentary_action=action,
+        )
+
+    def test_xlsx_has_status_column_13(self, tmp_path: Path) -> None:
+        """Move B — new Status column at position 13 (after Comments)."""
+        out = tmp_path / "out.xlsx"
+        _write_xlsx([self._line()], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        # Row 2 is the header.
+        assert ws.cell(row=2, column=13).value == "Status"
+
+    def test_xlsx_status_column_renders_pill_value(self, tmp_path: Path) -> None:
+        out = tmp_path / "out.xlsx"
+        # An on-track sub-program — combined Revenue + Expenditure, with
+        # revenue collected covering the spend (positive available).
+        rev = self._line(
+            sub_program="4001",
+            account="Revenue",
+            budget="10000",
+            ytd="6000",
+        )
+        exp = self._line(
+            sub_program="4001",
+            account="Expenditure",
+            budget="10000",
+            ytd="5000",
+        )
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        # Data row 3, Status col 13. Available = rev_y − exp_y = 6000 − 5000 = +1000.
+        assert ws.cell(row=3, column=13).value == "On track"
+
+    def test_xlsx_comments_cell_uses_prose_form(self, tmp_path: Path) -> None:
+        """Move E + R1 fix: prose renders as two short sentences (was em-
+        dash splice). Reads as natural English, not template output."""
+        out = tmp_path / "out.xlsx"
+        # Combined Revenue + Expenditure so the line aggregates with a
+        # well-defined Status (R1 added annual_rev_budget gating).
+        rev = self._line(
+            sub_program="4001",
+            account="Revenue",
+            budget="10000",
+            ytd="6000",
+            notes="Reviewed by council",
+            driver="Ongoing",
+            action="Monitor",
+        )
+        exp = self._line(
+            sub_program="4001",
+            account="Expenditure",
+            budget="10000",
+            ytd="5000",
+        )
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        cell = ws.cell(row=3, column=12).value
+        assert cell == "Ongoing variance. Being monitored. Reviewed by council."
+
+    def test_xlsx_caps_percent_overflow(self, tmp_path: Path) -> None:
+        """Move F — a sub-program where rev_ytd / rev_budget = 21x is
+        capped to 999% (= 9.99 stored) for display."""
+        out = tmp_path / "out.xlsx"
+        # Sub-program 4400 Mathematics: rev_b $1,000, rev_y $21,365.
+        # rev_pct = 21.365 → cap to 9.99.
+        rev_line = self._line(
+            sub_program="4400",
+            account="Revenue",
+            budget="1000",
+            ytd="21365",
+        )
+        exp_line = self._line(
+            sub_program="4400",
+            account="Expenditure",
+            budget="7200",
+            ytd="2880",
+        )
+        _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        # Revenue % Received YTD is column 11.
+        # R1 fix: capped values now render as TEXT marker ">999%" / "<-999%"
+        # instead of the capped fraction — the marker survives print,
+        # while a numeric `999.0%` cell looks like a real measurement.
+        rev_pct_value = ws.cell(row=3, column=11).value
+        assert rev_pct_value == ">999%"
+
+    def test_xlsx_capped_cell_carries_note_with_uncapped_value(self, tmp_path: Path) -> None:
+        """When a percent is capped, attach a cell comment with the real
+        uncapped value so an investigator can see the truth."""
+        out = tmp_path / "out.xlsx"
+        rev_line = self._line(
+            sub_program="4400",
+            account="Revenue",
+            budget="1000",
+            ytd="21365",
+        )
+        exp_line = self._line(
+            sub_program="4400",
+            account="Expenditure",
+            budget="7200",
+            ytd="2880",
+        )
+        _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        rev_pct_cell = ws.cell(row=3, column=11)
+        assert rev_pct_cell.comment is not None
+        assert "2136" in (rev_pct_cell.comment.text or "") or "21.36" in (
+            rev_pct_cell.comment.text or ""
+        )
+
+    def test_xlsx_status_urgent_for_admin_scale_overrun(self, tmp_path: Path) -> None:
+        """The real KMAR Admin row (row 55, $1.3M overdraw) — Status
+        must read 'Investigate urgently'."""
+        out = tmp_path / "out.xlsx"
+        # Simplified: $581,700 expenditure budget, $192,126 spent + huge orders.
+        # The real row's available balance is -$1,342,953 — engineer the line
+        # to produce that.
+        rev = self._line(
+            sub_program="7001",
+            account="Revenue",
+            budget="0",
+            ytd="26436",
+        )
+        # Expenditure side: budget $581,700, ytd $192,126, but huge outstanding
+        # orders push available balance deep negative.
+        exp = SubProgramLine(
+            sub_program="7001",
+            account="Expenditure",
+            description="Administration",
+            budget=Decimal("581700"),
+            ytd=Decimal("192126"),
+            remaining=Decimal("389574"),
+            used_pct=Decimal("33"),
+            faculty="Administration",
+            is_over=True,
+            outstanding_orders=Decimal("1732527"),
+        )
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=3, column=13).value == "Investigate urgently"
+
+    def test_xlsx_status_no_spend_yet_when_budget_set_no_movement(self, tmp_path: Path) -> None:
+        """A sub-program with material budget but $0 YTD past 25% of the
+        year. Budget must be above the $5K materiality floor — a smaller
+        budget reads as chart-of-accounts noise, not a council issue."""
+        out = tmp_path / "out.xlsx"
+        rev = self._line(
+            sub_program="8330",
+            account="Revenue",
+            budget="10000",
+            ytd="0",
+        )
+        exp = self._line(
+            sub_program="8330",
+            account="Expenditure",
+            budget="10000",
+            ytd="0",
+        )
+        # April 2026 → calendar_pct ≈ 33.3
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=3, column=13).value == "No spend yet"
+
+
+# ---------------------------------------------------------------------------
+# Round 53 F1 R1 — regression tests for the fixes applied after the
+# 4-Opus-agent review. Pin behaviours that would otherwise silently
+# regress on a future writer / pill rewrite.
+# ---------------------------------------------------------------------------
+
+
+class TestF1Round1Fixes:
+    """Targeted tests for the 12 R1 fixes."""
+
+    def _exp_only_line(
+        self,
+        sub_program: str,
+        budget: str,
+        ytd: str,
+    ) -> SubProgramLine:
+        """Expenditure-only sub-program (no revenue side)."""
+        b = Decimal(budget)
+        y = Decimal(ytd)
+        return SubProgramLine(
+            sub_program=sub_program,
+            account="Expenditure",
+            description=f"{sub_program} desc",
+            budget=b,
+            ytd=y,
+            remaining=b - y,
+            used_pct=(y / b * Decimal("100")) if b != 0 else Decimal("0"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+
+    def test_expenditure_only_on_pace_renders_on_track(self) -> None:
+        """R1 fix: Curriculum sub-program with $10K exp budget, $3,500
+        YTD spend at calendar 33% — within ±15% pacing band → On track,
+        NOT 'Significant overspend' as the raw available signal would
+        produce."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # exp_y / eb = 0.35, expected = 0.33, gap = 0.02 → within ±15% band
+        assert (
+            compute_status_pill(
+                available=Decimal("-3500"),
+                annual_exp_budget=Decimal("10000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("3500"),
+                calendar_pct=33.3,
+            )
+            == "On track"
+        )
+
+    def test_expenditure_only_significantly_ahead_of_pace_flags(self) -> None:
+        """An exp-only program 60% spent at calendar 33% — outside ±15%
+        band, exp ahead by 27pp → status escalates."""
+        from tools.sub_program.logic import compute_status_pill
+
+        result = compute_status_pill(
+            available=Decimal("-60000"),
+            annual_exp_budget=Decimal("100000"),
+            rev_ytd=Decimal("0"),
+            exp_ytd=Decimal("60000"),
+            calendar_pct=33.3,
+        )
+        assert result in ("Slightly over", "Significant overspend", "Investigate urgently"), result
+
+    def test_spent_without_budget_excludes_revenue_only_program(self) -> None:
+        """R1 fix: a fundraiser with rev_b > 0, exp_b = 0, exp_y > 0 is
+        NOT 'Spent without budget' — it's a cost-recovery program."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # The gate: must be exp_b == 0 AND rev_b == 0 to fire.
+        assert (
+            compute_status_pill(
+                available=Decimal("-2000"),  # spent more than collected
+                annual_exp_budget=Decimal("0"),
+                annual_rev_budget=Decimal("50000"),
+                rev_ytd=Decimal("30000"),
+                exp_ytd=Decimal("32000"),
+            )
+            != "Spent without budget"
+        )
+
+    def test_spent_without_budget_fires_when_truly_unbudgeted(self) -> None:
+        """The hard case: $0 budget on both sides, $X spent."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-454545"),
+                annual_exp_budget=Decimal("0"),
+                annual_rev_budget=Decimal("0"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("454545"),
+            )
+            == "Spent without budget"
+        )
+
+    def test_prose_drops_contradictory_structural_one_time(self) -> None:
+        """R1 fix: 'Structural variance' + 'won't recur' is contradictory
+        — the outlook is dropped, structural stands alone."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(driver="Structural", outlook="One-time")
+            == "Structural variance."
+        )
+
+    def test_prose_drops_contradictory_one_time_continuing(self) -> None:
+        """One-time + 'expected to continue' is contradictory."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(driver="One-time", outlook="Expected to continue")
+            == "One-time variance."
+        )
+
+    def test_prose_drops_contradictory_investigating_no_action(self) -> None:
+        """'Driver under investigation' + 'no action needed' is direct
+        contradiction — investigating IS an action."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(driver="Investigating", action="None")
+            == "Driver under investigation."
+        )
+
+    def test_xlsx_capped_avail_pct_renders_text_marker(self, tmp_path: Path) -> None:
+        """R1 fix: capped percent now renders as ">999%" / "<-999%" text
+        instead of the capped fraction. The text survives print; the
+        cell-comment tooltip is screen-only and invisible on paper."""
+        # Build a sub-program with extreme over-spend → avail_pct < -9.99
+        # and another with extreme over-collection → rev_pct > 9.99.
+        rev = SubProgramLine(
+            sub_program="9999",
+            account="Revenue",
+            description="Test",
+            budget=Decimal("1000"),
+            ytd=Decimal("21000"),
+            remaining=Decimal("-20000"),
+            used_pct=Decimal("2100"),
+            faculty="Curriculum",
+            is_over=True,
+        )
+        exp = SubProgramLine(
+            sub_program="9999",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("1000"),
+            ytd=Decimal("0"),
+            remaining=Decimal("1000"),
+            used_pct=Decimal("0"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        out = tmp_path / "capped.xlsx"
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        # rev_y / rev_b = 21 → cap to ">999%"
+        assert ws.cell(row=3, column=11).value == ">999%"
+
+    def test_xlsx_pink_fill_extends_to_status_column(self, tmp_path: Path) -> None:
+        """R1 regression test: an over-budget row paints pink across all
+        13 columns including the new Status pill cell. Without this the
+        Status would visually un-pink against the rest of the row."""
+        # Engineer a $50K overrun on $10K budget → urgent + pink fill.
+        from toolkit.tokens import HL_MISMATCH
+
+        rev = SubProgramLine(
+            sub_program="4001",
+            account="Revenue",
+            description="Test",
+            budget=Decimal("0"),
+            ytd=Decimal("0"),
+            remaining=Decimal("0"),
+            used_pct=Decimal("0"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("60000"),
+            remaining=Decimal("-50000"),
+            used_pct=Decimal("600"),
+            faculty="Curriculum",
+            is_over=True,
+        )
+        out = tmp_path / "pink.xlsx"
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        status_cell = ws.cell(row=3, column=13)
+        # The pink fill is the canonical HL_MISMATCH ARGB. The fgColor
+        # may surface as either an RGB or theme reference depending on
+        # openpyxl version; check the suffix.
+        fill = status_cell.fill
+        assert fill is not None
+        rgb = fill.fgColor.rgb if fill.fgColor is not None else None
+        assert rgb is not None and HL_MISMATCH in rgb.upper()
+
+    def test_xlsx_no_spend_yet_is_bold(self, tmp_path: Path) -> None:
+        """R1 fix: 'No spend yet' joins Material/Urgent/Spent-without-
+        budget in the bold set. It's a row council members would ask
+        about."""
+        rev = SubProgramLine(
+            sub_program="8330",
+            account="Revenue",
+            description="Camp",
+            budget=Decimal("10000"),
+            ytd=Decimal("0"),
+            remaining=Decimal("10000"),
+            used_pct=Decimal("0"),
+            faculty="Programs & Camps",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="8330",
+            account="Expenditure",
+            description="Camp",
+            budget=Decimal("10000"),
+            ytd=Decimal("0"),
+            remaining=Decimal("10000"),
+            used_pct=Decimal("0"),
+            faculty="Programs & Camps",
+            is_over=False,
+        )
+        out = tmp_path / "nospend.xlsx"
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        status_cell = ws.cell(row=3, column=13)
+        assert status_cell.value == "No spend yet"
+        assert status_cell.font is not None
+        assert status_cell.font.bold is True
+
+    def test_xlsx_auto_fills_empty_comments_for_urgent_rows(self, tmp_path: Path) -> None:
+        """R1 fix: when Status is Urgent / Significant / Spent-without-
+        budget / No-spend-yet AND Comments is empty, auto-fill with
+        '(no commentary recorded)' so the cell doesn't print as a
+        contradiction (urgent status with blank Comments looks like
+        the BM ignored the alert)."""
+        rev = SubProgramLine(
+            sub_program="7001",
+            account="Revenue",
+            description="Admin",
+            budget=Decimal("0"),
+            ytd=Decimal("0"),
+            remaining=Decimal("0"),
+            used_pct=Decimal("0"),
+            faculty="Administration",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="7001",
+            account="Expenditure",
+            description="Admin",
+            budget=Decimal("100000"),
+            ytd=Decimal("250000"),
+            remaining=Decimal("-150000"),
+            used_pct=Decimal("250"),
+            faculty="Administration",
+            is_over=True,
+        )
+        out = tmp_path / "autofill.xlsx"
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        status = ws.cell(row=3, column=13).value
+        comments = ws.cell(row=3, column=12).value
+        assert status == "Investigate urgently"
+        assert comments == "(no commentary recorded)"
+
+    def test_prose_round_trip_through_decode_commentary(self) -> None:
+        """R1 regression test: a prose cell from R53+ fed back through
+        ``decode_commentary`` (next month's prior-period join) returns
+        the prose verbatim as Notes-only — no crash, no partial parse,
+        no silent loss of structure."""
+        from tools.sub_program.logic import decode_commentary, render_commentary_prose
+
+        prose = render_commentary_prose(
+            notes="Reviewed by council",
+            driver="Ongoing",
+            outlook="Expected to continue",
+            action="Monitor",
+        )
+        # prose = "Ongoing variance, expected to continue. Being monitored. Reviewed by council."
+        notes_back, driver_back, outlook_back, action_back = decode_commentary(prose)
+        # Graceful fallback: whole text becomes Notes; structured fields
+        # are blank. (User can re-pick categorisation in the editor.)
+        assert notes_back == prose
+        assert driver_back == ""
+        assert outlook_back == ""
+        assert action_back == ""
+
+    def test_status_pill_boundary_overrun_exactly_5000(self) -> None:
+        """R1 boundary pin: overrun = $5,000 exact. ``< mat`` so this
+        falls past 'On track' and into the bucket logic; with budget
+        $50K the pct_over = 10% which is < both Material and Urgent
+        thresholds → 'Slightly over'."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-5000"),
+                annual_exp_budget=Decimal("50000"),
+                annual_rev_budget=Decimal("50000"),  # combined
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("5000"),
+            )
+            == "Slightly over"
+        )
+
+    def test_status_pill_boundary_overrun_exactly_25000(self) -> None:
+        """R1 boundary pin: at $25,000 exact, should NOT promote to
+        Significant (rule is ``> $25,000``, not ``>=``). pct_over =
+        25% with budget $100K — also exactly at the boundary, should
+        stay 'Slightly over'."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-25000"),
+                annual_exp_budget=Decimal("100000"),
+                annual_rev_budget=Decimal("100000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("25000"),
+            )
+            == "Slightly over"
+        )
+
+    def test_status_pill_boundary_overrun_just_above_25000(self) -> None:
+        """R1 boundary pin: $25,000.01 = Significant (just over)."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-25000.01"),
+                annual_exp_budget=Decimal("100000"),
+                annual_rev_budget=Decimal("100000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("25000.01"),
+            )
+            == "Significant overspend"
+        )
+
+    def test_status_pill_boundary_overrun_exactly_100000(self) -> None:
+        """R1 boundary pin: at $100,000 exact, should NOT promote to
+        Urgent (rule is ``> $100,000``). Material gate fires at the
+        $25K dollar threshold ($100K > $25K), so the value lands in
+        Significant overspend, NOT Urgent."""
+        from tools.sub_program.logic import compute_status_pill
+
+        result = compute_status_pill(
+            available=Decimal("-100000"),
+            annual_exp_budget=Decimal("500000"),
+            annual_rev_budget=Decimal("500000"),
+            rev_ytd=Decimal("0"),
+            exp_ytd=Decimal("100000"),
+        )
+        # $100K is NOT > $100K (strict >), so NOT Urgent. But $100K is
+        # > $25K Material dollar threshold → Significant overspend.
+        assert result == "Significant overspend"
+
+    def test_status_pill_boundary_overrun_just_above_100000(self) -> None:
+        """R1 boundary pin: $100,000.01 = Urgent (just past)."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-100000.01"),
+                annual_exp_budget=Decimal("500000"),
+                annual_rev_budget=Decimal("500000"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("100000.01"),
+            )
+            == "Investigate urgently"
+        )
+
+    def test_status_pill_boundary_calendar_pct_25(self) -> None:
+        """R1 boundary pin: calendar_pct = 25.0 exact → On track (the
+        rule is ``> 25``, strictly above). 25.01 → No spend yet."""
+        from tools.sub_program.logic import compute_status_pill
+
+        on_25 = compute_status_pill(
+            available=Decimal("10000"),
+            annual_exp_budget=Decimal("10000"),
+            annual_rev_budget=Decimal("10000"),
+            rev_ytd=Decimal("0"),
+            exp_ytd=Decimal("0"),
+            calendar_pct=25.0,
+        )
+        on_25_plus = compute_status_pill(
+            available=Decimal("10000"),
+            annual_exp_budget=Decimal("10000"),
+            annual_rev_budget=Decimal("10000"),
+            rev_ytd=Decimal("0"),
+            exp_ytd=Decimal("0"),
+            calendar_pct=25.01,
+        )
+        assert on_25 == "On track"
+        assert on_25_plus == "No spend yet"

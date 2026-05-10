@@ -208,6 +208,323 @@ def decode_commentary(text: str) -> tuple[str, str, str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Round 53 F1 — Status pills (Move B)
+# ---------------------------------------------------------------------------
+# The XLSX output gains a per-sub-program ``Status`` column whose value
+# is one of six plain-English pills. The pill replaces — for non-finance
+# readers — the unreadable ``Available Balance % YTD`` column (which can
+# read ``-2.21`` for a 221% overdraw and which the actual KMAR file
+# shows as a literal ``7`` for stale ``=N/A`` cells).
+
+_STATUS_ON_TRACK = "On track"
+_STATUS_SLIGHTLY_OVER = "Slightly over"
+# Round 53 F1 R1 fix: was "Material concern" (finance jargon).
+# Renamed to plain English so a non-finance reader parses it correctly.
+_STATUS_MATERIAL = "Significant overspend"
+_STATUS_URGENT = "Investigate urgently"
+_STATUS_NO_SPEND_YET = "No spend yet"
+_STATUS_SPENT_WITHOUT_BUDGET = "Spent without budget"
+
+_STATUS_VALUES: tuple[str, ...] = (
+    _STATUS_ON_TRACK,
+    _STATUS_SLIGHTLY_OVER,
+    _STATUS_MATERIAL,
+    _STATUS_URGENT,
+    _STATUS_NO_SPEND_YET,
+    _STATUS_SPENT_WITHOUT_BUDGET,
+)
+
+# Bucket boundaries for overrun magnitude. Both dollar AND percent
+# triggers fire — whichever is larger picks the bucket. This matches
+# the variance-analysis skill's "either exceeded" rule for materiality.
+_STATUS_URGENT_DOLLAR = Decimal("100000")
+_STATUS_URGENT_PCT = Decimal("50")
+_STATUS_MATERIAL_DOLLAR = Decimal("25000")
+_STATUS_MATERIAL_PCT = Decimal("25")
+
+# "No spend yet" only fires when we're past 25% of the year — earlier
+# than that, an empty YTD on a budgeted line is normal seasonal flow.
+_NO_SPEND_CALENDAR_THRESHOLD = 25.0
+
+
+def compute_status_pill(
+    *,
+    available: Decimal,
+    annual_exp_budget: Decimal,
+    rev_ytd: Decimal,
+    exp_ytd: Decimal,
+    annual_rev_budget: Decimal = Decimal("0"),
+    materiality_dollar: int = 5000,
+    calendar_pct: float = 0.0,
+) -> str:
+    """Return a plain-English status pill for one sub-program row.
+
+    ``available`` is the signed YTD net position (rev_ytd + carry-forward
+    − exp_ytd − outstanding_orders, mirrors the XLSX writer's calc).
+    Positive = surplus / under-spend; negative = over-drawn.
+
+    Pill picks (first match wins):
+
+    * ``Spent without budget`` — TRULY unbudgeted capital spend:
+      ``annual_exp_budget == 0 AND annual_rev_budget == 0 AND exp_ytd > 0``.
+      The R1-fix-tightened gate excludes fundraising programs that
+      have a revenue budget but no expenditure budget (cost-recovery
+      style), which would otherwise mis-fire here.
+    * ``No spend yet`` — annual exp budget > materiality_dollar AND
+      both exp_ytd == 0 AND rev_ytd == 0 AND calendar past 25%. A
+      council member would ask "shouldn't this be funded by now?".
+    * ``On track`` — for combined programs (both rev_b and exp_b > 0):
+      surplus, OR overrun below the materiality dollar floor.
+      For expenditure-only programs (no revenue side): R1 fix uses a
+      pacing-aware compare — pacing within ±15% of calendar is on
+      track. Without this, a 50%-spent line in April (calendar 33%)
+      would mis-classify as Material via the raw available signal.
+    * ``Investigate urgently`` — overrun > $100K OR > 50% of budget.
+    * ``Significant overspend`` — overrun $25K–$100K OR 25–50% of
+      budget. (Renamed from the R0 "Material concern" — was finance
+      jargon to a non-finance reader.)
+    * ``Slightly over`` — anything else past the materiality floor.
+    """
+    mat = Decimal(str(materiality_dollar))
+
+    # Spent without budget — capital-spend-without-approval flag.
+    # R1 fix: tightened gate — must have NO budget on either side.
+    # A fundraiser with rev_b > 0, exp_b == 0 is NOT unbudgeted.
+    if annual_exp_budget == 0 and annual_rev_budget == 0 and exp_ytd > 0:
+        return _STATUS_SPENT_WITHOUT_BUDGET
+
+    # No spend yet — placeholder past 25% of year.
+    if (
+        annual_exp_budget > mat
+        and exp_ytd == 0
+        and rev_ytd == 0
+        and calendar_pct > _NO_SPEND_CALENDAR_THRESHOLD
+    ):
+        return _STATUS_NO_SPEND_YET
+
+    # R1 fix: Expenditure-only sub-programs (no revenue side and no
+    # carry-forward) need a pacing-aware comparison. The raw
+    # ``available`` value is just ``-exp_ytd`` for these — it always
+    # reads as deficit, even when the program is perfectly on pace.
+    # We compare actual spend pace to calendar pace: if exp_ytd / eb
+    # is within ±15% of calendar_pct / 100, the line is on track.
+    is_expenditure_only = annual_rev_budget == 0 and rev_ytd == 0 and annual_exp_budget > 0
+    if is_expenditure_only and calendar_pct > 0:
+        actual_pace = exp_ytd / annual_exp_budget
+        expected_pace = Decimal(str(calendar_pct)) / Decimal("100")
+        pace_gap = actual_pace - expected_pace
+        # Within 15% pacing band -> on track. The 15% band gives a
+        # generous tolerance for chunky / front-loaded / back-loaded
+        # spending patterns common in school programs.
+        if abs(pace_gap) <= Decimal("0.15"):
+            return _STATUS_ON_TRACK
+        # Outside the band — fall through to the standard overrun
+        # logic but using exp_ytd-vs-budget as the overrun magnitude
+        # rather than the raw available signal.
+        if pace_gap > 0:
+            # Over-pacing.
+            overrun = exp_ytd - (annual_exp_budget * expected_pace)
+            pct_over = pace_gap * Decimal("100")
+            if overrun >= mat:
+                if overrun > _STATUS_URGENT_DOLLAR or pct_over > _STATUS_URGENT_PCT:
+                    return _STATUS_URGENT
+                if overrun > _STATUS_MATERIAL_DOLLAR or pct_over > _STATUS_MATERIAL_PCT:
+                    return _STATUS_MATERIAL
+                return _STATUS_SLIGHTLY_OVER
+        # Under-pacing — programs that haven't ramped up are on
+        # track for budget. (No status flag; council members would
+        # ask via the No-spend-yet trigger above for the extreme case.)
+        return _STATUS_ON_TRACK
+
+    # Surplus / on-pace — on track.
+    if available >= 0:
+        return _STATUS_ON_TRACK
+
+    overrun = -available  # positive number
+    if overrun < mat:
+        # Below materiality dollar floor — "$50 over $30 stationery"
+        # case. Not a council issue.
+        return _STATUS_ON_TRACK
+
+    # Compute overrun as percent of expenditure budget. When budget is
+    # zero we already returned earlier; safe to divide here.
+    if annual_exp_budget > 0:
+        pct_over = overrun / annual_exp_budget * Decimal("100")
+    else:
+        pct_over = Decimal("0")
+
+    if overrun > _STATUS_URGENT_DOLLAR or pct_over > _STATUS_URGENT_PCT:
+        return _STATUS_URGENT
+    if overrun > _STATUS_MATERIAL_DOLLAR or pct_over > _STATUS_MATERIAL_PCT:
+        return _STATUS_MATERIAL
+    return _STATUS_SLIGHTLY_OVER
+
+
+# ---------------------------------------------------------------------------
+# Round 53 F1 — Plain-English commentary (Move E)
+# ---------------------------------------------------------------------------
+# The XLSX Comments cell renders the structured Phase-D triplet as
+# plain English instead of the bracketed prefix that lives internally.
+# Round-trip fidelity through prior-period files is sacrificed in the
+# rendered cell (the visible value is prose, not the prefix); the
+# decoder still works on legacy R51 prefix-encoded cells.
+
+_DRIVER_PROSE: dict[str, str] = {
+    "One-time": "One-time variance",
+    "Ongoing": "Ongoing variance",
+    "Structural": "Structural variance",
+    "Timing-early": "Spend earlier than planned",
+    "Timing-late": "Spend later than planned",
+    "Investigating": "Driver under investigation",
+}
+
+_OUTLOOK_PROSE: dict[str, str] = {
+    "One-time": "won't recur",
+    "Expected to continue": "expected to continue",
+    "Improving": "improving",
+    "Deteriorating": "deteriorating",
+}
+
+_ACTION_PROSE: dict[str, str] = {
+    "None": "no action needed",
+    "Monitor": "being monitored",
+    "Investigate": "needs investigation",
+    "Update forecast": "forecast update needed",
+}
+
+
+def _capitalize_first(s: str) -> str:
+    """Uppercase only the first character. Differs from str.capitalize
+    which lower-cases the rest — we want 'Reviewed by HOD' to keep
+    'HOD' upper-cased, not become 'Reviewed by hod'."""
+    return s[:1].upper() + s[1:] if s else s
+
+
+def _ensure_terminal_period(s: str) -> str:
+    """Ensure the trimmed string ends with terminal punctuation."""
+    s = s.strip()
+    if not s:
+        return s
+    if s[-1] in (".", "!", "?"):
+        return s
+    return s + "."
+
+
+# Combinations that read as logically contradictory and should NOT
+# render together. R1 fix: Round-1 logic skeptic flagged these.
+# Format: (driver, outlook) tuples whose outlook is dropped.
+_CONTRADICTORY_DRIVER_OUTLOOK: frozenset[tuple[str, str]] = frozenset(
+    {
+        # Structural variance won't recur — by definition it's permanent.
+        ("Structural", "One-time"),
+        # One-time variance "expected to continue" — definitionally wrong.
+        ("One-time", "Expected to continue"),
+    }
+)
+
+# Driver / Action combinations where the action is dropped (it
+# duplicates or contradicts the driver).
+_CONTRADICTORY_DRIVER_ACTION: frozenset[tuple[str, str]] = frozenset(
+    {
+        # "Driver under investigation" + "no action needed" is a direct
+        # contradiction — investigating IS an action.
+        ("Investigating", "None"),
+    }
+)
+
+
+def render_commentary_prose(
+    notes: str = "",
+    driver: str = "",
+    outlook: str = "",
+    action: str = "",
+) -> str:
+    """Render structured commentary as plain-English prose for the
+    XLSX Comments cell.
+
+    Returns a 1–2 sentence string. The structured triplet (Driver +
+    Outlook + Action) collapses to one or two short sentences (each
+    with its own period — R1 fix replaced the em-dash splice that
+    read as software-generated); the freeform Notes paragraph is the
+    final sentence. All blank returns "".
+
+    Unknown structured values (schema drift, hand edit) fall through
+    silently — no crash, no half-sentence.
+
+    Round 1 fix: contradictory triplet combinations have the conflicting
+    field dropped (e.g. ``Structural`` + ``One-time`` outlook drops the
+    outlook; ``Investigating`` + ``None`` action drops the action). See
+    :data:`_CONTRADICTORY_DRIVER_OUTLOOK` / `_CONTRADICTORY_DRIVER_ACTION`.
+    """
+    driver_prose = _DRIVER_PROSE.get(driver, "")
+    outlook_prose = _OUTLOOK_PROSE.get(outlook, "")
+    action_prose = _ACTION_PROSE.get(action, "")
+
+    # R1 fix: drop conflicting outlook / action combinations.
+    if driver and outlook and (driver, outlook) in _CONTRADICTORY_DRIVER_OUTLOOK:
+        outlook_prose = ""
+    if driver and action and (driver, action) in _CONTRADICTORY_DRIVER_ACTION:
+        action_prose = ""
+
+    # Sentence 1: description (Driver + Outlook joined with ", ").
+    # Sentence 2: action_prose, capitalised, its own sentence.
+    # Sentence 3: notes verbatim with terminal punctuation guaranteed.
+    # R1 fix: replaced em-dash splice ("description — action") with two
+    # short sentences ("description. Action."). Reads as natural
+    # English instead of template output.
+    desc_pieces: list[str] = []
+    if driver_prose:
+        desc_pieces.append(driver_prose)
+    if outlook_prose:
+        if desc_pieces:
+            desc_pieces.append(outlook_prose)
+        else:
+            # Outlook leads — "Outlook improving."
+            desc_pieces.append("Outlook " + outlook_prose)
+    description = ", ".join(desc_pieces)
+
+    sentences: list[str] = []
+    if description:
+        sentences.append(_ensure_terminal_period(_capitalize_first(description)))
+    if action_prose:
+        sentences.append(_ensure_terminal_period(_capitalize_first(action_prose)))
+    if notes:
+        sentences.append(_ensure_terminal_period(_capitalize_first(notes.strip())))
+
+    return " ".join(sentences)
+
+
+# ---------------------------------------------------------------------------
+# Round 53 F1 — Percent display cap (Move F)
+# ---------------------------------------------------------------------------
+# Some sub-programs produce percent values that read as nonsense to a
+# non-finance reader (the actual KMAR file has rev_y / rev_b = 21.36 =
+# "2,136% revenue received" for sub-program 4400 Mathematics). We cap
+# the displayed value at ±999% (= ±9.99 stored, since the cell number
+# format is ``0.0%``) and attach a cell comment carrying the uncapped
+# value so investigators still see the truth.
+
+_PERCENT_CAP = Decimal("9.99")
+
+
+def cap_percent_for_display(pct: Decimal | float | int | None) -> Decimal | None:
+    """Cap an unbounded percent (stored as a fraction, e.g. 0.65 =
+    65%) at ±999% for display.
+
+    Returns ``None`` for ``None`` input. Otherwise returns a Decimal
+    in the closed range ``[-9.99, 9.99]``.
+    """
+    if pct is None:
+        return None
+    p = Decimal(str(pct))
+    if p > _PERCENT_CAP:
+        return _PERCENT_CAP
+    if p < -_PERCENT_CAP:
+        return -_PERCENT_CAP
+    return p
+
+
+# ---------------------------------------------------------------------------
 # Faculty inference
 # ---------------------------------------------------------------------------
 # Sub-program codes are numeric (e.g. 4001, 8599).
@@ -1316,7 +1633,8 @@ def _write_monthly_sub_program_sheet(
     title_cell = ws.cell(row=1, column=1, value=title)
     title_cell.font = _TITLE_FONT
     title_cell.alignment = Alignment(horizontal="center")
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=12)
+    # Round 53 F1: title spans 13 columns now (Status added at col 13).
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
 
     # ----- Header row -----
     # Year label for the budget headers — extracted from period_label
@@ -1343,8 +1661,12 @@ def _write_monthly_sub_program_sheet(
         "Available Balance % YTD",
         "Revenue Budget % Received YTD",
         "Comments",
+        # Round 53 F1 — Status pill (col 13). Plain-English summary so a
+        # non-finance reader can scan the rightmost column and instantly
+        # see which sub-programs need attention.
+        "Status",
     ]
-    widths = [8, 32, 14, 16, 22, 14, 14, 14, 16, 12, 14, 50]
+    widths = [8, 32, 14, 16, 22, 14, 14, 14, 16, 12, 14, 50, 22]
     for col_idx, (header, width) in enumerate(zip(headers, widths, strict=True), start=1):
         cell = ws.cell(row=2, column=col_idx, value=header)
         cell.font = Font(bold=True)
@@ -1398,50 +1720,124 @@ def _write_monthly_sub_program_sheet(
         # Excel percent format so they render as "39.8%" not "0.398".
         # Round 47 fix: number_format was missing pre-fix, principals
         # saw raw decimals.
-        if avail_pct is not None:
-            c = ws.cell(row=row_idx, column=10, value=float(avail_pct))
-            c.number_format = _PERCENT_AS_PERCENT_FMT
-        if rev_pct is not None:
-            c = ws.cell(row=row_idx, column=11, value=float(rev_pct))
-            c.number_format = _PERCENT_AS_PERCENT_FMT
+        # Round 53 F1 (Move F): cap unbounded percents at ±999% for
+        # display so a non-finance reader sees a finite number.
+        # R1 fix: when capped, write a text marker (">999%" /
+        # "<-999%") instead of the capped fraction — the marker
+        # SURVIVES print, while the original cell-comment tooltip is
+        # screen-only and invisible on the printed copy. Cell comment
+        # ALSO attached for screen readers who want exact value.
+        from openpyxl.comments import Comment
 
-        # Round 51 Phase D — encode structured triplet + notes into a
-        # single cell. When all four are blank the encoded form is "",
-        # so existing "no commentary" rows keep producing empty cells.
+        def _write_capped_percent(r: int, cell_col: int, raw_pct: Decimal, label: str) -> None:
+            capped = cap_percent_for_display(raw_pct)
+            assert capped is not None
+            cell = ws.cell(row=r, column=cell_col)
+            if capped != raw_pct:
+                # Render as text marker so the cap is visible on print.
+                marker = ">999%" if raw_pct > 0 else "<-999%"
+                cell.value = marker
+                cell.number_format = "@"
+                cell.comment = Comment(
+                    f"Capped from {float(raw_pct) * 100:.1f}% for display ({label}).",
+                    "School Tool",
+                )
+            else:
+                cell.value = float(capped)
+                cell.number_format = _PERCENT_AS_PERCENT_FMT
+
+        if avail_pct is not None:
+            _write_capped_percent(row_idx, 10, avail_pct, "Available Balance %")
+        if rev_pct is not None:
+            _write_capped_percent(row_idx, 11, rev_pct, "Revenue % Received")
+
+        # Round 53 F1 (Move B) — Status pill at column 13. Per-
+        # sub-program plain-English summary computed from the same
+        # available-balance value the Available Balance YTD column
+        # carries, so the pill and the dollar number always tell the
+        # same story. R1 fix: also pass annual_rev_budget so the
+        # Spent-without-budget gate can distinguish capital-spend-
+        # without-approval from rev-only / cost-recovery programs.
+        status = compute_status_pill(
+            available=available,
+            annual_exp_budget=eb,
+            annual_rev_budget=rb,
+            rev_ytd=ry,
+            exp_ytd=ey,
+            materiality_dollar=materiality_dollar,
+            calendar_pct=calendar_pct_from_period_label(period_label),
+        )
+        status_cell = ws.cell(row=row_idx, column=13, value=status)
+        # Bold the call-for-attention pills (Urgent / Significant /
+        # Spent-without-budget / No-spend-yet) so they stand out on
+        # the printed page. R1 fix added No-spend-yet to the bold set
+        # — it's the row a council member would ask about.
+        if status in (
+            _STATUS_URGENT,
+            _STATUS_MATERIAL,
+            _STATUS_SPENT_WITHOUT_BUDGET,
+            _STATUS_NO_SPEND_YET,
+        ):
+            status_cell.font = Font(bold=True)
+
+        # Round 53 F1 (Move E) — render structured triplet + notes as
+        # plain-English prose. Replaces the Round-51 prefix encoding for
+        # the visible cell. Pre-Round-53 prefix-encoded cells still
+        # round-trip through ``load_prior_period_comments`` +
+        # ``decode_commentary`` (the reader handles both forms).
+        # R1 fix: when prose is empty AND the Status is non-OK, auto-
+        # fill with a "(no commentary recorded)" placeholder so the
+        # cell doesn't print as a contradiction (urgent status with
+        # blank Comments looks like the BM ignored the alert).
         c_notes, c_driver, c_outlook, c_action = commentary_tuple.get(sp, ("", "", "", ""))
-        encoded = encode_commentary(
-            c_notes,
+        prose = render_commentary_prose(
+            notes=c_notes,
             driver=c_driver,
             outlook=c_outlook,
             action=c_action,
         )
-        # Round 1 fix (R51): defensive Excel-formula-injection guard.
-        # A user typing ``=SUM(...)`` or ``+1`` (or pasting bank text
-        # starting with ``-`` / ``@``) into Notes would otherwise get
+        if not prose and status in (
+            _STATUS_URGENT,
+            _STATUS_MATERIAL,
+            _STATUS_SPENT_WITHOUT_BUDGET,
+            _STATUS_NO_SPEND_YET,
+        ):
+            prose = "(no commentary recorded)"
+        # Defensive Excel-formula-injection guard. A user typing
+        # ``=SUM(...)`` etc. into Notes would otherwise get
         # auto-evaluated by Excel on file open, surfacing as ``#NAME?``
         # or unexpected numerics. We prepend an apostrophe — Excel's
-        # canonical "force text" sigil — when the encoded string starts
-        # with a formula prefix. The apostrophe doesn't appear in the
-        # cell display but is preserved in the stored value, so the
-        # round-trip into ``decode_commentary`` strips it cleanly.
-        if encoded and encoded[0] in ("=", "+", "-", "@"):
-            comment_cell = ws.cell(row=row_idx, column=12, value="'" + encoded)
+        # canonical "force text" sigil. The apostrophe doesn't render
+        # in Excel display but is preserved in the stored value, and
+        # ``load_prior_period_comments`` strips it on read.
+        if prose and prose[0] in ("=", "+", "-", "@"):
+            comment_cell = ws.cell(row=row_idx, column=12, value="'" + prose)
         else:
-            comment_cell = ws.cell(row=row_idx, column=12, value=encoded)
+            comment_cell = ws.cell(row=row_idx, column=12, value=prose)
         # Round 47: long commentary cells need wrap_text or they
         # overflow horizontally and push the print width past one page.
         comment_cell.alignment = Alignment(wrap_text=True, vertical="top")
-        # Round 1 fix (R51): force the cell to stay text-formatted so a
-        # user pasting "01/04/2026 reviewed" doesn't get auto-coerced
-        # into an Excel date by General-format inference on re-save.
+        # Round 51 R1 fix: force text format so a user pasting
+        # "01/04/2026 reviewed" doesn't get auto-coerced into an Excel
+        # date by General-format inference on re-save.
         comment_cell.number_format = "@"
+        # R1 fix: explicit row height so multi-line prose doesn't clip
+        # on print. Default Excel row height is 15pt — shows only the
+        # first line. Heuristic: ~50 chars per visual line at column
+        # width 50, ~15pt per line.
+        col_12_width = 50
+        prose_visual_lines = max(1, (len(prose) + col_12_width - 1) // col_12_width)
+        if prose_visual_lines > 1:
+            ws.row_dimensions[row_idx].height = 15 * prose_visual_lines
 
         # Pink fill on rows where Available Balance YTD is negative
         # AND the magnitude meets the dollar materiality floor —
         # mirrors the in-app row_style behaviour so a $50 over a $30
         # budget doesn't paint pink in the printed copy. Round 47.
+        # Round 53 F1: extended ``range(1, 14)`` paints cols 1..13
+        # inclusive, so the new Status column also gets the row tint.
         if available < 0 and abs(available) >= materiality_dollar:
-            for col_idx in range(1, 13):
+            for col_idx in range(1, 14):
                 ws.cell(row=row_idx, column=col_idx).fill = _OVER_FILL
 
     # Freeze panes below the header so the column titles stay

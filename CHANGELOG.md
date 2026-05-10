@@ -5,6 +5,35 @@ is at the top.
 
 ---
 
+## v2.3.1.0 — May 2026
+
+* **Sub-Program Budget Report — plain-English Status column + prose
+  commentary.** The XLSX output gains a Status column (col 13) whose
+  value is one of `On track`, `Slightly over`, `Material concern`,
+  `Investigate urgently`, `No spend yet`, or `Spent without budget`
+  — a non-finance reader can scan the column and instantly see which
+  sub-programs need attention without parsing the `Available Balance
+  % YTD` value (which can read `−2.21` for a 221% overdraw and which
+  the actual KMAR file shows as a literal `7` for stale `=N/A`
+  cells). The Status pill is sub-program-level and computed from the
+  same Available Balance value the dollar column carries, so the two
+  columns always tell the same story. Pills for `Material concern`,
+  `Investigate urgently`, and `Spent without budget` are bold-faced
+  for print scan-ability.
+* **Plain-English commentary in the Comments cell.** The Round 51
+  structured triplet (Driver / Outlook / Action) is now rendered as
+  one or two human sentences in the visible cell — e.g. `[Driver:
+  Ongoing | Action: Monitor] Reviewed by council` becomes `Ongoing
+  variance — being monitored. Reviewed by council.`. Round-trip via
+  prior-period files is unaffected for cells written by Round 51
+  (the reader handles both forms).
+* **Percent cap on Available Balance % and Revenue % Received.**
+  Unbounded percents (e.g. Mathematics row's revenue ratio of 21.36
+  = `2,136%`) cap at ±999% for display, with an Excel cell comment
+  carrying the uncapped value for any reader who needs the truth.
+
+---
+
 ## v2.3.0.0 — May 2026
 
 * **Sub-Program Budget Report — structured commentary.** The single
