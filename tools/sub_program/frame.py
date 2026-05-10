@@ -315,12 +315,17 @@ class SubProgramBudgetReportTool:
         # this dollar threshold render muted in the table even when
         # they exceed the percentage threshold above. This stops the
         # "$50 over a $30 stationery budget" rows from competing for
-        # attention with "$18,000 over the IT budget" rows. Default
-        # $5,000 — a typical sub-program-line scale at Vic schools.
+        # attention with "$18,000 over the IT budget" rows.
         # Round 48 — label rewritten in plain English. The literal
         # term "materiality threshold" is finance jargon that means
         # nothing to a school business officer; "ignore amounts
         # under" describes what the input actually does.
+        # Round 58 — default lowered $5,000 → $100 per user feedback.
+        # The earlier $5K default suppressed too many "interesting"
+        # mid-range overruns (e.g. a $3K stationery overspend that a
+        # business manager would want flagged). $100 is closer to the
+        # $500 hard noise floor that compute_status_pill enforces
+        # internally so the slider's effect is more predictable.
         NumberInput(
             key="materiality_dollar",
             label="Ignore amounts under ($)",
@@ -328,7 +333,7 @@ class SubProgramBudgetReportTool:
             max_value=1_000_000.0,
             decimals=0,
             width=10,
-            default=5000.0,
+            default=100.0,
         ),
     ]
     # No output file picker — output path is auto-derived beside the source PDF.
@@ -356,8 +361,9 @@ class SubProgramBudgetReportTool:
     _cached_revenue_threshold: float = 101.0
     _cached_expense_threshold: float = 101.0
     # Round 45 Phase A — dollar materiality. Round 56 dropped
-    # _cached_calendar_pct (no pacing).
-    _cached_materiality_dollar: int = 5000
+    # _cached_calendar_pct (no pacing). Round 58 lowered default
+    # 5000 → 100 to match the new NumberInput default.
+    _cached_materiality_dollar: int = 100
 
     def run(self, paths: dict[str, Any], progress: ProgressFn) -> ToolResult:
         try:
@@ -397,17 +403,18 @@ class SubProgramBudgetReportTool:
             # users actually act on.
             over_budget_threshold = expense_threshold
 
-            # Round 45 Phase A — materiality dollar floor.  Default $5,000
-            # if the user clears the box; coerce to int (NumberField is
-            # decimals=0 but emits a string).
+            # Round 45 Phase A — materiality dollar floor. Round 58
+            # lowered default $5,000 → $100 to match the NumberInput.
+            # Used when the user clears the box; coerce to int
+            # (NumberField is decimals=0 but emits a string).
             raw_mat = paths.get("materiality_dollar")
             if raw_mat in (None, ""):
-                materiality_dollar = 5000
+                materiality_dollar = 100
             else:
                 try:
                     materiality_dollar = int(float(str(raw_mat)))
                 except (TypeError, ValueError):
-                    materiality_dollar = 5000
+                    materiality_dollar = 100
 
             # 3. Delegate to logic — parse only, no XLSX write.
             summary: ReportSummary = logic.generate_report(
@@ -1290,7 +1297,7 @@ class SubProgramBudgetReportTool:
         self._cached_threshold = 101.0
         self._cached_revenue_threshold = 101.0
         self._cached_expense_threshold = 101.0
-        self._cached_materiality_dollar = 5000
+        self._cached_materiality_dollar = 100
 
     def _merge_commentary_overrides(self, summary: ReportSummary) -> ReportSummary:
         """Round 51 Phase D — apply the 4-tuple override per sub-program.

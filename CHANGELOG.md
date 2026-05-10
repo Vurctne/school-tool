@@ -5,6 +5,17 @@ is at the top.
 
 ---
 
+## v2.4.14.0 — May 2026
+
+* **Sub-Program Budget Report — "Ignore amounts under" default
+  lowered $5,000 → $100.** The earlier $5K default suppressed too
+  many mid-range overruns that a business manager would want flagged
+  (e.g. a $3K stationery overspend reading as on-track). $100 is
+  closer to the $500 hard noise floor compute_status_pill enforces
+  internally so the slider's effect is more predictable.
+
+---
+
 ## v2.4.13.0 — May 2026
 
 * **Mouse wheel scrolling.** Scrollable areas in the tool view now
