@@ -5,6 +5,47 @@ is at the top.
 
 ---
 
+## v2.4.13.0 — May 2026
+
+* **Mouse wheel scrolling.** Scrollable areas in the tool view now
+  respond to the mouse wheel — previously the only way to scroll was
+  via the scrollbar. Wheel events are scoped to the canvas the cursor
+  is over, so the binding doesn't steal scroll from sibling widgets
+  (log panel, table, etc.). Same scoped pattern applied to the
+  `SelectableList` primitive so any tool that uses one (User tab
+  service list, future feature lists) gets wheel-scroll automatically.
+* **Sub-Program Budget Report — Trend column dropped from XLSX.** The
+  exported workbook is now 13 columns wide (was 14 in F2). The Trend
+  column was rarely populated in practice (required a prior-period
+  XLSX, which the export path didn't actually plumb through) and the
+  Status pill alone carries the call-to-attention. Funds from
+  Previous Years moves up to col 4 (was col 5); Comments to col 13
+  (was col 14); the print area shrinks from `A1:N` to `A1:M`.
+* **Sub-Program Budget Report — Funds from Previous Years now rolls
+  forward.** When the user supplies a prior-period XLSX via the
+  Prior-period comments picker, the writer reads the
+  "Funds from Previous Years (Funds)" column from that file and
+  populates the same column in the new period's output. Sub-programs
+  not present in the prior file leave the cell blank (no fabricated
+  zeros). Previously the column was always blank — schools had to
+  re-enter their carry-forward by hand every period.
+* **Sub-Program Budget Report — derived columns now use Excel
+  formulas.** Three computed columns now write Excel formulas instead
+  of pre-computed numeric values, so a school auditor can see how
+  each number is derived:
+  * Available Balance YTD: `=D{r}+G{r}-H{r}-I{r}` (Funds + Revenue
+    YTD − Expenditure YTD − Outstanding orders)
+  * Available Balance % YTD: `=J{r}/F{r}` (Available Balance YTD ÷
+    Annual Expenditure Budget)
+  * Revenue Budget % Received YTD: `=G{r}/E{r}` (Revenue YTD ÷ Annual
+    Revenue Budget)
+
+  Capped percentages (>999% / <-999%) keep the existing text marker
+  fallback for display so the cap is visible on print; the cell
+  comment continues to carry the uncapped value for screen readers.
+
+---
+
 ## v2.4.12.0 — May 2026
 
 * **Sub-Program Budget Report — pacing logic dropped.** All calendar-

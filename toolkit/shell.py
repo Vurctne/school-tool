@@ -680,6 +680,29 @@ class TkShell(ttk.Frame):
         inner.bind("<Configure>", _on_inner_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
 
+        # Round 57 — mouse-wheel scroll for the tool panel. Scope the
+        # bind_all to <Enter>/<Leave> so we only intercept wheel events
+        # when the cursor is actually over THIS canvas — otherwise the
+        # binding would steal wheel events from other widgets (the log
+        # panel, the table, etc.). The /120 division converts Tk's raw
+        # delta (a multiple of 120 on Windows) into "units" of canvas
+        # scroll; the negative sign flips the natural-scroll direction
+        # so wheel-up moves the content up.
+        def _on_mousewheel(event: Any) -> None:
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+
+        canvas.bind(
+            "<Enter>",
+            lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel),
+        )
+        canvas.bind(
+            "<Leave>",
+            lambda _e: canvas.unbind_all("<MouseWheel>"),
+        )
+
         pad = tokens.SP_4  # 16 px
         gap = tokens.SP_GAP_SECTION  # 10 px per design spec
 

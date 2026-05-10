@@ -318,25 +318,23 @@ class TestGenerateReport:
             f"Expected 'Sub Program Report' sheet; got {wb.sheetnames}"
         )
         ws = wb["Sub Program Report"]
-        # F2 layout: Status (col 3) + Trend (col 4) lead the financials
-        # so the eye lands on the call-to-action before the dollar
-        # columns. Total 14 cols; legacy 12-col baseline pinned by an
-        # earlier round of this test was rewritten in Round 56.
-        headers = [str(ws.cell(2, c).value or "") for c in range(1, 15)]
+        # Round 57 layout: Status (col 3) leads the financials; the F2
+        # Trend column was dropped, so Funds from Previous Years moves
+        # up to col 4 and the rest shift left by 1. Total 13 cols.
+        headers = [str(ws.cell(2, c).value or "") for c in range(1, 14)]
         assert headers[0] == "CODE"
         assert headers[1] == "PROGRAM NAME"
         assert headers[2] == "Status"
-        assert headers[3] == "Trend"
-        assert headers[4].startswith("Funds from Previous Years")
-        assert headers[5].startswith("Budget Revenue")
-        assert headers[6].startswith("Total Budget Allocation Expenditure")
-        assert headers[7] == "Revenue YTD"
-        assert headers[8] == "Expenditure YTD"
-        assert headers[9] == "Less outstanding orders"
-        assert headers[10] == "Available Balance YTD"
-        assert headers[11] == "Available Balance % YTD"
-        assert headers[12] == "Revenue Budget % Received YTD"
-        assert headers[13] == "Comments"
+        assert headers[3].startswith("Funds from Previous Years")
+        assert headers[4].startswith("Budget Revenue")
+        assert headers[5].startswith("Total Budget Allocation Expenditure")
+        assert headers[6] == "Revenue YTD"
+        assert headers[7] == "Expenditure YTD"
+        assert headers[8] == "Less outstanding orders"
+        assert headers[9] == "Available Balance YTD"
+        assert headers[10] == "Available Balance % YTD"
+        assert headers[11] == "Revenue Budget % Received YTD"
+        assert headers[12] == "Comments"
 
     def test_output_row_count_matches_unique_subprograms(self, tmp_path: Path) -> None:
         """Round 38 — one row per sub-program (was: one row per
@@ -1195,7 +1193,7 @@ class TestStructuredCommentaryXlsxOutput:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # Header is rows 1-2, data starts row 3. Comments is column 12.
-        cell = ws.cell(row=3, column=14).value
+        cell = ws.cell(row=3, column=13).value
         # R1 fix: prose now uses period+capital splits instead of em-dash.
         assert cell == "Ongoing variance. Being monitored. Reviewed by council."
 
@@ -1206,7 +1204,7 @@ class TestStructuredCommentaryXlsxOutput:
 
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=14).value
+        cell = ws.cell(row=3, column=13).value
         # Empty cell renders as None or "" depending on openpyxl version.
         assert cell in (None, "")
 
@@ -1222,7 +1220,7 @@ class TestStructuredCommentaryXlsxOutput:
 
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=14).value == "Reviewed by council."
+        assert ws.cell(row=3, column=13).value == "Reviewed by council."
 
 
 # ---------------------------------------------------------------------------
@@ -1326,7 +1324,7 @@ class TestStructuredCommentaryRound1Fixes:
         _write_xlsx([line_a, line_b], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=14).value
+        cell = ws.cell(row=3, column=13).value
         # Cell carries row A's notes only (row A came first), NOT a
         # fabricated "Needs investigation. Row A note." combination
         # mixing row B's Action with row A's notes. Round 53 F1:
@@ -1353,7 +1351,7 @@ class TestStructuredCommentaryRound1Fixes:
         _write_xlsx([line], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=14)
+        cell = ws.cell(row=3, column=13)
         # Round 53 F1: prose renderer adds a terminal period.
         assert cell.value == "'=SUM(D3:E3) outdated."
         # Cell is text-formatted, not a formula.
@@ -1380,7 +1378,7 @@ class TestStructuredCommentaryRound1Fixes:
             _write_xlsx([line], out, period_label="Apr 2026")
             wb = openpyxl.load_workbook(out, data_only=True)
             ws = wb["Sub Program Report"]
-            cell = ws.cell(row=3, column=14)
+            cell = ws.cell(row=3, column=13)
             # Round 53 F1: prose renderer adds a terminal period.
             assert cell.value == f"'{sigil}danger.", f"sigil {sigil!r} should be guarded"
 
@@ -1815,7 +1813,7 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        cell = ws.cell(row=3, column=14).value
+        cell = ws.cell(row=3, column=13).value
         assert cell == "Ongoing variance. Being monitored. Reviewed by council."
 
     def test_xlsx_caps_percent_overflow(self, tmp_path: Path) -> None:
@@ -1839,11 +1837,12 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        # Revenue % Received YTD is column 11.
+        # Round 57: Revenue % Received YTD is column 12 (was 13 in F2,
+        # shifted left after Trend column dropped).
         # R1 fix: capped values now render as TEXT marker ">999%" / "<-999%"
         # instead of the capped fraction — the marker survives print,
         # while a numeric `999.0%` cell looks like a real measurement.
-        rev_pct_value = ws.cell(row=3, column=13).value
+        rev_pct_value = ws.cell(row=3, column=12).value
         assert rev_pct_value == ">999%"
 
     def test_xlsx_capped_cell_carries_note_with_uncapped_value(self, tmp_path: Path) -> None:
@@ -1865,7 +1864,8 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        rev_pct_cell = ws.cell(row=3, column=13)
+        # Round 57: Revenue % at col 12 (was 13 in F2).
+        rev_pct_cell = ws.cell(row=3, column=12)
         assert rev_pct_cell.comment is not None
         assert "2136" in (rev_pct_cell.comment.text or "") or "21.36" in (
             rev_pct_cell.comment.text or ""
@@ -2071,7 +2071,8 @@ class TestF1Round1Fixes:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # rev_y / rev_b = 21 → cap to ">999%"
-        assert ws.cell(row=3, column=13).value == ">999%"
+        # Round 57: Revenue % at col 12 (was 13 in F2).
+        assert ws.cell(row=3, column=12).value == ">999%"
 
     def test_xlsx_pink_fill_extends_to_status_column(self, tmp_path: Path) -> None:
         """R1 regression test: an over-budget row paints pink across all
@@ -2183,7 +2184,7 @@ class TestF1Round1Fixes:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         status = ws.cell(row=3, column=3).value
-        comments = ws.cell(row=3, column=14).value
+        comments = ws.cell(row=3, column=13).value
         assert status == "Investigate urgently"
         # R2 fix: imperative cue for non-OK statuses (was archival).
         assert comments == "Action needed: add commentary."
@@ -2461,7 +2462,7 @@ class TestF1Round2Fixes:
         ws = wb["Sub Program Report"]
         assert ws.cell(row=3, column=3).value == "On track"
         # On-track rows leave Comments empty — no contradiction to fix.
-        assert ws.cell(row=3, column=14).value is None
+        assert ws.cell(row=3, column=13).value is None
 
     def test_xlsx_comments_width_reduced_to_40_then_32(self, tmp_path: Path) -> None:
         """Round 53 R2 reduced Comments column 50 → 40. F2 R1 further
@@ -2484,7 +2485,7 @@ class TestF1Round2Fixes:
         ws = wb["Sub Program Report"]
         # Column 12 is Comments; Excel column letter "L".
         # F2 R1: width is now 32 (down from 40).
-        assert ws.column_dimensions["N"].width == 32
+        assert ws.column_dimensions["M"].width == 32
 
     def test_xlsx_capped_marker_with_pink_fill_and_text_format(self, tmp_path: Path) -> None:
         """R2 regression test: a row that's both materially over AND
@@ -2521,13 +2522,14 @@ class TestF1Round2Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        rev_pct_cell = ws.cell(row=3, column=13)
+        # Round 57: Revenue % at col 12 (was 13 in F2).
+        rev_pct_cell = ws.cell(row=3, column=12)
         # Capped marker.
         assert rev_pct_cell.value == ">999%"
         # Text format.
         assert rev_pct_cell.number_format == "@"
         # Pink fill (row is materially over, so the pink-fill loop
-        # paints col 11 too).
+        # paints col 12 too).
         rgb = rev_pct_cell.fill.fgColor.rgb if rev_pct_cell.fill.fgColor is not None else None
         assert rgb is not None and HL_MISMATCH in rgb.upper()
 
@@ -2743,23 +2745,28 @@ class TestF2XlsxLayout:
         ws = wb["Sub Program Report"]
         assert ws.cell(row=2, column=3).value == "Status"
 
-    def test_header_row_trend_at_col_4(self, tmp_path: Path) -> None:
+    def test_header_row_funds_at_col_4(self, tmp_path: Path) -> None:
+        """Round 57: Trend column dropped; Funds from Previous Years
+        moves up from col 5 to col 4 (right after Status)."""
         out = tmp_path / "out.xlsx"
         rev = self._line("4001", "Revenue", "10000", "5000")
         exp = self._line("4001", "Expenditure", "10000", "5000")
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=2, column=4).value == "Trend"
+        header = str(ws.cell(row=2, column=4).value or "")
+        assert header.startswith("Funds from Previous Years")
 
-    def test_header_row_comments_at_col_14(self, tmp_path: Path) -> None:
+    def test_header_row_comments_at_col_13(self, tmp_path: Path) -> None:
+        """Round 57: Comments shifts left from col 14 to col 13 after
+        Trend column drop."""
         out = tmp_path / "out.xlsx"
         rev = self._line("4001", "Revenue", "10000", "5000")
         exp = self._line("4001", "Expenditure", "10000", "5000")
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=2, column=14).value == "Comments"
+        assert ws.cell(row=2, column=13).value == "Comments"
 
     def test_data_row_status_at_col_3(self, tmp_path: Path) -> None:
         out = tmp_path / "out.xlsx"
@@ -2769,15 +2776,6 @@ class TestF2XlsxLayout:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         assert ws.cell(row=3, column=3).value == "On track"
-
-    def test_data_row_trend_blank_when_no_prior(self, tmp_path: Path) -> None:
-        out = tmp_path / "out.xlsx"
-        rev = self._line("4001", "Revenue", "10000", "6000")
-        exp = self._line("4001", "Expenditure", "10000", "5000")
-        _write_xlsx([rev, exp], out, period_label="Apr 2026")
-        wb = openpyxl.load_workbook(out, data_only=True)
-        ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=4).value in (None, "")
 
 
 class TestF2WatchlistSheet:
@@ -3009,11 +3007,10 @@ class TestF2Round1Fixes:
         _write_xlsx([ln], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out)
         ws = wb["Sub Program Report"]
-        # print_area set; openpyxl returns "'Sheet'!$A$1:$N$N" form.
+        # print_area set; openpyxl returns "'Sheet'!$A$1:$M$N" form.
         assert ws.print_area
-        # Strip dollar signs and sheet prefix; verify A1 origin and
-        # ends on column N (col 14).
-        assert "$A$1" in ws.print_area and "$N$" in ws.print_area
+        # Round 57: ends on column M (col 13) after Trend column dropped.
+        assert "$A$1" in ws.print_area and "$M$" in ws.print_area
 
     def test_xlsx_watchlist_has_autofilter_and_pink_tab(self, tmp_path: Path) -> None:
         """R1 fix: Watchlist sheet has AutoFilter on its header row and
@@ -3097,7 +3094,7 @@ class TestF2Round1Fixes:
         wb = openpyxl.load_workbook(out)
         ws = wb["Sub Program Report"]
         # Comments at col 14 = letter "N".
-        assert ws.column_dimensions["N"].width == 32
+        assert ws.column_dimensions["M"].width == 32
 
     def test_watchlist_excludes_unspent_programs(self, tmp_path: Path) -> None:
         """Round 56: the Watchlist is strictly an over-budget list. A
@@ -3248,9 +3245,10 @@ class TestF2Round2Fixes:
             tab_color_str = str(tab_color.rgb if hasattr(tab_color, "rgb") else tab_color)
             assert HL_MISMATCH in tab_color_str.upper()
 
-    def test_footer_text_when_no_prior_period_is_compact(self, tmp_path: Path) -> None:
-        """R2 fix: footer shortened to ~53 chars (was 95) so it fits
-        the footer-left zone without wrapping or truncation."""
+    def test_footer_text_is_plain_attribution(self, tmp_path: Path) -> None:
+        """Round 57: the F2 trend-warning footer was dropped along with
+        the Trend column. The footer-left always shows the plain
+        'Generated by School Tool' attribution now."""
         out = tmp_path / "footer.xlsx"
         ln = SubProgramLine(
             sub_program="4001",
@@ -3267,9 +3265,7 @@ class TestF2Round2Fixes:
         wb = openpyxl.load_workbook(out)
         ws = wb["Sub Program Report"]
         footer_left = ws.oddFooter.left.text if ws.oddFooter is not None else None
-        assert footer_left is not None
-        assert "prior-period" in footer_left.lower()
-        assert len(footer_left) <= 60, f"Footer too long: {len(footer_left)} chars"
+        assert footer_left == "Generated by School Tool"
 
     def test_footer_text_when_prior_period_supplied_is_attribution(self, tmp_path: Path) -> None:
         """When prior-period IS supplied, footer is the plain attribution."""

@@ -708,6 +708,79 @@ def load_prior_period_ytd(xlsx_path: Path) -> dict[str, Decimal]:
         wb.close()
 
 
+def load_prior_period_funds(xlsx_path: Path) -> dict[str, Decimal]:
+    """Round 57 — return ``{sub_program_code: funds_from_previous_years}``
+    for every data row in the supplied prior-period XLSX.
+
+    Reads the "Funds from Previous Years" (or "Funds from Previous Years
+    (Funds)") column and pairs it with the sub-program code. Empty dict
+    when the file is supplied but doesn't carry the column. Skips the
+    Watchlist sheet (filtered subset).
+
+    Used by the writer to populate the same column in the current
+    period's output, preserving the carry-forward field across reports
+    so a school doesn't have to re-enter it every period.
+    """
+    if not xlsx_path.exists():
+        raise ValueError(f"Prior-period file not found: {xlsx_path}")
+
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True, read_only=True)
+    try:
+        result: dict[str, Decimal] = {}
+        code_synonyms = ("code", "sub-prog", "sub prog", "sub program", "sub-program")
+        for sheet_name in wb.sheetnames:
+            if sheet_name.lower() == "watchlist":
+                continue
+            ws = wb[sheet_name]
+            rows = list(ws.iter_rows(values_only=True))
+            if len(rows) < 2:
+                continue
+            for header_row_idx in (1, 0):
+                if header_row_idx >= len(rows):
+                    continue
+                header_raw = rows[header_row_idx]
+                header = [str(c).strip() if c is not None else "" for c in header_raw]
+                header_lower = [h.lower() for h in header]
+                code_col: int | None = None
+                for i, h in enumerate(header_lower):
+                    if any(syn in h for syn in code_synonyms):
+                        code_col = i
+                        break
+                funds_col: int | None = None
+                for i, h in enumerate(header_lower):
+                    if "funds from previous years" in h:
+                        funds_col = i
+                        break
+                if code_col is None or funds_col is None:
+                    continue
+                for data_row in rows[header_row_idx + 1 :]:
+                    if not data_row:
+                        continue
+                    sp_raw = (
+                        data_row[code_col]
+                        if code_col < len(data_row) and data_row[code_col] is not None
+                        else None
+                    )
+                    if sp_raw is None:
+                        continue
+                    sp = str(sp_raw).strip()
+                    if sp.endswith(".0"):
+                        sp = sp[:-2]
+                    if not sp.replace(".", "").isdigit():
+                        continue
+                    funds_raw = data_row[funds_col] if funds_col < len(data_row) else None
+                    if funds_raw is None:
+                        continue
+                    try:
+                        result[sp] = Decimal(str(funds_raw))
+                    except (InvalidOperation, ValueError):
+                        continue
+                break
+        return result
+    finally:
+        wb.close()
+
+
 # ---------------------------------------------------------------------------
 # Faculty inference
 # ---------------------------------------------------------------------------
@@ -841,6 +914,12 @@ class ReportSummary:
     # Round 45 Phase A — dollar materiality. Round 56 dropped the
     # ``calendar_pct`` field along with all pacing-based judgements.
     materiality_dollar: int = 5000
+    # Round 57 — carry-forward funds loaded from a prior-period XLSX
+    # via :func:`load_prior_period_funds`. Empty dict when no prior
+    # file was supplied. The writer reads this and populates the
+    # "Funds from Previous Years" column for matching sub-programs;
+    # rows with no match leave the cell blank (no fabricated zeros).
+    prior_funds: dict[str, Decimal] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -1618,6 +1697,7 @@ def _write_xlsx(
     include_combined: bool = False,
     materiality_dollar: int = 5000,
     prior_ytd: dict[str, Decimal] | None = None,
+    prior_funds: dict[str, Decimal] | None = None,
 ) -> None:
     """Write the report to an XLSX with the Monthly Sub Program Report shape.
 
@@ -1625,25 +1705,28 @@ def _write_xlsx(
     with a single sheet matching the school's own Monthly Sub Program
     Report workbook.
 
-    F2 (Round 54): the workbook now contains TWO sheets:
-    1. ``Sub Program Report`` — the per-sub-program detail (14 cols
-       in F2: Status at col 3, Trend at col 4, financials at cols
-       5..14). Same data as F1, just reshuffled.
+    F2 (Round 54): the workbook contains TWO sheets:
+    1. ``Sub Program Report`` — the per-sub-program detail. Round 57
+       collapsed the F2 Trend column, leaving 13 cols total
+       (Status at col 3, financials at cols 4..13).
     2. ``Watchlist`` — a filtered subset of sub-programs whose Status
        is not "On track", sorted by absolute variance descending.
        Council-targeted view.
 
-    Optional ``prior_ytd`` carries the prior-period Available Balance
-    YTD per sub-program (loaded via :func:`load_prior_period_ytd`); when
-    supplied, the Trend column populates with period-over-period
-    direction. When ``None`` the Trend column is blank for every row
-    and a footer note explains.
+    Round 57 dropped the Trend column entirely. The ``prior_ytd``
+    parameter is still accepted for backward compatibility with the
+    existing call sites + tests but no longer affects the output.
+
+    Round 57 added ``prior_funds`` — when supplied, the writer
+    populates the "Funds from Previous Years (Funds)" column from
+    the prior-period XLSX so the carry-forward field rolls forward
+    automatically.
 
     The ``include_combined`` and ``over_budget_threshold`` arguments
     are accepted for backward compatibility with existing call sites
     but no longer affect the output.
     """
-    del include_combined, over_budget_threshold  # no-op for the new shape
+    del include_combined, over_budget_threshold, prior_ytd  # no-op for the new shape
 
     from openpyxl import Workbook
 
@@ -1654,13 +1737,13 @@ def _write_xlsx(
 
     ws = wb.create_sheet("Sub Program Report")
     _write_monthly_sub_program_sheet(
-        ws, lines, period_label, materiality_dollar, prior_ytd=prior_ytd
+        ws, lines, period_label, materiality_dollar, prior_funds=prior_funds
     )
 
     # F2: Watchlist sheet — filtered subset for council.
     watchlist_ws = wb.create_sheet("Watchlist")
     _write_watchlist_sheet(
-        watchlist_ws, lines, period_label, materiality_dollar, prior_ytd=prior_ytd
+        watchlist_ws, lines, period_label, materiality_dollar, prior_funds=prior_funds
     )
 
     # R1 fix: pin the main sheet as active so Excel opens to it by
@@ -1678,38 +1761,50 @@ def _write_monthly_sub_program_sheet(
     period_label: str,
     materiality_dollar: int = 5000,
     *,
-    prior_ytd: dict[str, Decimal] | None = None,
+    prior_funds: dict[str, Decimal] | None = None,
     filter_to_non_ok: bool = False,
     sort_by_variance_desc: bool = False,
     sheet_title_override: str | None = None,
 ) -> None:
-    """Round 38 — Monthly Sub Program Report shape.
+    """Round 57 — Monthly Sub Program Report shape (13-col).
 
-    12-column per-sub-program output matching the school's own
-    "Monthly Sub Program Report" workbook:
+    Per-sub-program output matching the school's own "Monthly Sub
+    Program Report" workbook. Round 57 dropped the F2 Trend column;
+    the layout is now:
 
     1.  CODE                                 sub_program code
     2.  PROGRAM NAME                         description
-    3.  Funds from Previous Years (Funds)    carry-forward (blank — not in PDF)
-    4.  Budget Revenue {year}                annual revenue budget
-    5.  Total Budget Allocation Expenditure  annual expenditure budget
-    6.  Revenue YTD                          revenue collected so far
-    7.  Expenditure YTD                      expenditure spent so far
-    8.  Less outstanding orders              committed-but-not-paid
-    9.  Available Balance YTD                rev_y − exp_y − orders
-    10. Available Balance % YTD              available / expenditure budget
-    11. Revenue Budget % Received YTD        rev_y / revenue budget
-    12. Comments                             commentary
+    3.  Status                                computed pill
+    4.  Funds from Previous Years (Funds)    carry-forward (from prior file)
+    5.  Budget Revenue {year}                annual revenue budget
+    6.  Total Budget Allocation Expenditure  annual expenditure budget
+    7.  Revenue YTD                          revenue collected so far
+    8.  Expenditure YTD                      expenditure spent so far
+    9.  Less outstanding orders              committed-but-not-paid
+    10. Available Balance YTD                =D{r}+G{r}-H{r}-I{r}
+    11. Available Balance % YTD              =J{r}/F{r}
+    12. Revenue Budget % Received YTD        =G{r}/E{r}
+    13. Comments                             commentary
 
-    Rows where the Available Balance YTD is negative get the pink
-    ``_OVER_FILL`` (HL_MISMATCH) — the canonical "needs attention"
-    indicator across the toolkit.
+    Round 57: the three derived numeric columns (Available Balance YTD,
+    Available Balance %, Revenue Budget % Received) are written as
+    Excel formulas so a school auditor can see HOW each number is
+    derived. The percentage cells fall back to a text marker
+    (``>999%`` / ``<-999%``) when the result would exceed the cap;
+    in that case a comment carries the uncapped value for screen
+    readers.
 
-    The "Funds from Previous Years" column is left blank: the
-    GL21157 PDF doesn't carry rolled-forward surplus / deficit data,
-    and inferring it would risk producing wrong numbers.  Schools
-    that need the column populated can open the file and fill it in
-    by hand from their council records.
+    Rows where the Available Balance YTD is negative AND the magnitude
+    meets the dollar materiality floor get the pink ``_OVER_FILL``
+    (HL_MISMATCH) — the canonical "needs attention" indicator across
+    the toolkit.
+
+    The "Funds from Previous Years" column is populated from the
+    optional ``prior_funds`` dict (loaded via
+    :func:`load_prior_period_funds`). When no prior file is supplied
+    or a sub-program isn't found in the prior data, the cell stays
+    blank — a blank cell signals "not known", which is honest; a
+    zero would be a wrong number.
     """
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.worksheet import Worksheet
@@ -1798,14 +1893,15 @@ def _write_monthly_sub_program_sheet(
             annotated.sort(key=lambda t: t[1])
         sub_programs = [t[0] for t in annotated]
 
-    # ----- Title row (merged across 14 cols in F2) -----
+    # ----- Title row (merged across 13 cols in R57) -----
     base = sheet_title_override or "Monthly Sub Program Report"
     title = _sheet_title(base, period_label, "")
     title_cell = ws.cell(row=1, column=1, value=title)
     title_cell.font = _TITLE_FONT
     title_cell.alignment = Alignment(horizontal="center")
-    # F2: title spans 14 cols now (Status at col 3, Trend at col 4).
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=14)
+    # R57: title spans 13 cols (Trend column dropped — Status at col 3,
+    # Funds from Previous Years at col 4, financials at cols 5..13).
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=13)
 
     # ----- Header row -----
     # Year label for the budget headers — extracted from period_label
@@ -1820,14 +1916,14 @@ def _write_monthly_sub_program_sheet(
     exp_budget_header = f"Total Budget Allocation Expenditure {year_label}".strip()
 
     headers = [
-        # F2 layout: Status (col 3) and Trend (col 4) lead the financials
-        # so the eye lands on the call-to-action before the dollar
-        # columns. UX critic flagged col-13 placement twice; F2 is the
-        # cleanest time to move because we're already adding a column.
+        # R57 layout: Status at col 3 leads the financials so the eye
+        # lands on the call-to-action before the dollar columns. The
+        # F2 Trend column was dropped per user direction — the Status
+        # pill alone carries the call-to-attention; Trend was rarely
+        # populated in practice (required a prior-period file).
         "CODE",
         "PROGRAM NAME",
         "Status",
-        "Trend",
         "Funds from Previous Years (Funds) ",
         rev_budget_header,
         exp_budget_header,
@@ -1839,12 +1935,11 @@ def _write_monthly_sub_program_sheet(
         "Revenue Budget % Received YTD",
         "Comments",
     ]
-    # F2 widths: Status 22, Trend 16 added at positions 3-4. Cols 5-14
-    # retain their R53 widths except Comments shrunk 40 → 32 (R1 fix
-    # to relieve print compression). Total widths sum 246 char-units;
-    # landscape A4 fit-to-width has ~277 char-units of usable space
-    # at the configured 0.4" L/R margins, leaving ~11% margin.
-    widths = [8, 32, 22, 16, 14, 16, 22, 14, 14, 14, 16, 12, 14, 32]
+    # R57 widths: 13 cols (the F2 Trend col 16 unit was reclaimed).
+    # Comments stays 32 (relieves print compression). Total widths
+    # sum 230 char-units; landscape A4 fit-to-width has ~277 usable
+    # at the configured 0.4" L/R margins, leaving ~17% margin.
+    widths = [8, 32, 22, 14, 16, 22, 14, 14, 14, 16, 12, 14, 32]
     for col_idx, (header, width) in enumerate(zip(headers, widths, strict=True), start=1):
         cell = ws.cell(row=2, column=col_idx, value=header)
         cell.font = Font(bold=True)
@@ -1852,71 +1947,96 @@ def _write_monthly_sub_program_sheet(
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     # ----- Data rows -----
+    # Round 57 column layout (after dropping Trend):
+    #   D = Funds from Previous Years    (was E)
+    #   E = Budget Revenue               (was F)
+    #   F = Budget Expenditure           (was G)
+    #   G = Revenue YTD                  (was H)
+    #   H = Expenditure YTD              (was I)
+    #   I = Less outstanding orders      (was J)
+    #   J = Available Balance YTD        (=D+G-H-I)
+    #   K = Available Balance % YTD      (=J/F)
+    #   L = Revenue Budget % Received    (=G/E)
+    #   M = Comments
     for row_idx, sp in enumerate(sub_programs, start=3):
         ry = rev_y.get(sp, Decimal("0"))
         ey = exp_y.get(sp, Decimal("0"))
         rb = rev_b.get(sp, Decimal("0"))
         eb = exp_b.get(sp, Decimal("0"))
         oo = orders.get(sp, Decimal("0"))
-        # Carry-forward isn't in the PDF; we leave the cell blank
-        # rather than guessing a zero (a blank cell signals "not
-        # known", which is honest; a zero would be a wrong number).
-        carry_fwd: Decimal | None = None
-        # Available balance: rev_y + carry_fwd − exp_y − orders.
-        # carry_fwd defaults to zero for the calc.
+        # Round 57 — carry-forward is now populated from ``prior_funds``
+        # when the user supplied a prior-period XLSX. When no prior
+        # file or this sub-program isn't in it, the cell stays blank
+        # (a blank cell signals "not known", which is honest; a zero
+        # would be a wrong number).
+        carry_fwd: Decimal | None = prior_funds.get(sp) if prior_funds is not None else None
         cf_for_calc = carry_fwd if carry_fwd is not None else Decimal("0")
+        # Python-side available used only for status pill + pink fill;
+        # the cell itself uses an Excel formula so the user can audit
+        # the math.
         available = cf_for_calc + ry - ey - oo
-        # Available % = available / expenditure_budget.  Schools track
-        # "what fraction of my annual budget am I yet to commit".  Use
-        # ``!= 0`` rather than ``> 0`` so the rare negative-budget rows
-        # (cost-recovery accounts that net to a negative annual figure)
-        # still produce a percentage; otherwise we'd silently emit a
-        # blank cell for valid CASES21 data.
-        avail_pct: Decimal | None = available / eb if eb != 0 else None
-        # Revenue % received = rev_y / revenue_budget.
-        rev_pct: Decimal | None = ry / rb if rb != 0 else None
 
         ws.cell(row=row_idx, column=1, value=_to_int_or_str(sp))
         ws.cell(row=row_idx, column=2, value=desc.get(sp, ""))
-        # Status (col 3) and Trend (col 4) are populated below — we
-        # write them after computing the pill so the cell write happens
-        # in one place. Cols 5..14 are the existing financials shifted
-        # right by 2.
-        # Funds from Previous Years stays blank (col 5).
+        # Status (col 3) is populated below — we write it after
+        # computing the pill so the cell write happens in one place.
+
+        # Funds from Previous Years (col 4) — value when known, blank
+        # when not. carry_fwd is None when no prior file supplied or
+        # this sub-program wasn't in it.
         if carry_fwd is not None:
-            c = ws.cell(row=row_idx, column=5, value=float(carry_fwd))
+            c = ws.cell(row=row_idx, column=4, value=float(carry_fwd))
             c.number_format = _ACCOUNTING_FMT
 
+        # Cols 5..9 are raw inputs (parsed from the PDF) — these stay
+        # as values. Cols 10..12 are derived and become formulas so
+        # the user can audit how each number is computed.
         for col_idx, value in (
-            (6, rb),
-            (7, eb),
-            (8, ry),
-            (9, ey),
-            (10, oo),
-            (11, available),
+            (5, rb),  # Budget Revenue
+            (6, eb),  # Budget Expenditure
+            (7, ry),  # Revenue YTD
+            (8, ey),  # Expenditure YTD
+            (9, oo),  # Outstanding orders
         ):
             c = ws.cell(row=row_idx, column=col_idx, value=float(value))
             c.number_format = _ACCOUNTING_FMT
 
-        # Percentages — written as fractions and formatted with the
-        # Excel percent format so they render as "39.8%" not "0.398".
-        # Round 47 fix: number_format was missing pre-fix, principals
-        # saw raw decimals.
-        # Round 53 F1 (Move F): cap unbounded percents at ±999% for
-        # display so a non-finance reader sees a finite number.
-        # R1 fix: when capped, write a text marker (">999%" /
-        # "<-999%") instead of the capped fraction — the marker
-        # SURVIVES print, while the original cell-comment tooltip is
-        # screen-only and invisible on the printed copy. Cell comment
-        # ALSO attached for screen readers who want exact value.
+        # Round 57 — Available Balance YTD (col 10/J) as Excel formula.
+        # The formula references col D (Funds), G (Revenue YTD),
+        # H (Expenditure YTD), I (Outstanding orders).
+        # Empty Funds cell evaluates to 0 in Excel arithmetic so the
+        # formula works whether or not col D is populated.
+        avail_formula = f"=D{row_idx}+G{row_idx}-H{row_idx}-I{row_idx}"
+        avail_cell = ws.cell(row=row_idx, column=10, value=avail_formula)
+        avail_cell.number_format = _ACCOUNTING_FMT
+
+        # Round 57 — Available Balance % YTD (col 11/K) and Revenue
+        # Budget % Received YTD (col 12/L) as Excel formulas with
+        # display-cap fallback.
+        # Round 53 F1 (Move F) — cap unbounded percents at ±999% for
+        # display so a non-finance reader sees a finite number. When
+        # the computed value exceeds the cap, write a text marker
+        # (``>999%`` / ``<-999%``) instead of the formula; an attached
+        # cell comment carries the uncapped value.
         from openpyxl.comments import Comment
 
-        def _write_capped_percent(r: int, cell_col: int, raw_pct: Decimal, label: str) -> None:
+        def _write_capped_percent_or_formula(
+            r: int,
+            cell_col: int,
+            raw_pct: Decimal | None,
+            formula: str,
+            label: str,
+        ) -> None:
+            cell = ws.cell(row=r, column=cell_col)
+            if raw_pct is None:
+                # Divisor is zero — leave blank rather than #DIV/0!.
+                return
             capped = cap_percent_for_display(raw_pct)
             assert capped is not None
-            cell = ws.cell(row=r, column=cell_col)
             if capped != raw_pct:
-                # Render as text marker so the cap is visible on print.
+                # Out of range — fall back to a text marker so the cap
+                # is visible on print. The formula would compute the
+                # uncapped value if we used it, breaking the cap.
                 marker = ">999%" if raw_pct > 0 else "<-999%"
                 cell.value = marker
                 cell.number_format = "@"
@@ -1925,22 +2045,32 @@ def _write_monthly_sub_program_sheet(
                     "School Tool",
                 )
             else:
-                cell.value = float(capped)
+                # In range — write the formula so the user can audit it.
+                cell.value = formula
                 cell.number_format = _PERCENT_AS_PERCENT_FMT
 
-        if avail_pct is not None:
-            _write_capped_percent(row_idx, 12, avail_pct, "Available Balance %")
-        if rev_pct is not None:
-            _write_capped_percent(row_idx, 13, rev_pct, "Revenue % Received")
+        avail_pct: Decimal | None = available / eb if eb != 0 else None
+        rev_pct: Decimal | None = ry / rb if rb != 0 else None
+        # Available % formula: =J{r}/F{r} (uses the avail formula's cell)
+        _write_capped_percent_or_formula(
+            row_idx,
+            11,
+            avail_pct,
+            f"=J{row_idx}/F{row_idx}",
+            "Available Balance %",
+        )
+        # Revenue % formula: =G{r}/E{r}
+        _write_capped_percent_or_formula(
+            row_idx,
+            12,
+            rev_pct,
+            f"=G{row_idx}/E{row_idx}",
+            "Revenue % Received",
+        )
 
-        # Round 53 F1 (Move B) — Status pill at column 13. Per-
-        # sub-program plain-English summary computed from the same
-        # available-balance value the Available Balance YTD column
-        # carries, so the pill and the dollar number always tell the
-        # Round 56: pacing-free contract. compute_status_pill gates on
-        # ``exp_ytd > expense_threshold% × annual_exp_budget`` rather
-        # than the Available Balance signal. The expense_threshold
-        # default (101%) matches the user's slider default.
+        # Round 53 F1 (Move B) — Status pill at col 3. Round 56:
+        # pacing-free contract; compute_status_pill gates on
+        # ``exp_ytd > expense_threshold% × annual_exp_budget``.
         status = compute_status_pill(
             annual_exp_budget=eb,
             exp_ytd=ey,
@@ -1948,41 +2078,14 @@ def _write_monthly_sub_program_sheet(
             rev_ytd=ry,
             materiality_dollar=materiality_dollar,
         )
-        # F2: Status moves from col 13 to col 3 (after PROGRAM NAME).
         status_cell = ws.cell(row=row_idx, column=3, value=status)
-        # Bold the call-for-attention pills (Urgent / Significant /
-        # Spent-without-budget) so they stand out on the printed page.
-        # Round 56: dropped No-spend-yet from this set (pill removed).
+        # Bold the call-for-attention pills so they stand out on print.
         if status in (
             _STATUS_URGENT,
             _STATUS_MATERIAL,
             _STATUS_SPENT_WITHOUT_BUDGET,
         ):
             status_cell.font = Font(bold=True)
-
-        # F2 Move D — Trend column at col 4. When ``prior_ytd`` is
-        # supplied, look up this sub-program's prior Available Balance
-        # YTD and compute the period-over-period direction. When the
-        # caller didn't supply a prior-period file, the cell stays
-        # blank (sheet-level footer note explains why; see end of
-        # this function).
-        trend_label = ""
-        if prior_ytd is not None:
-            prior_value = prior_ytd.get(sp)
-            trend_label = compute_trend(
-                current_available=available,
-                prior_available=prior_value,
-                # R1 fix: pass status so Trend agrees with Status on
-                # pacing-aware Expenditure-only programs (avoids the
-                # contradictory "On track | Worsening" pairing).
-                current_status=status,
-                materiality_dollar=materiality_dollar,
-            )
-        trend_cell = ws.cell(row=row_idx, column=4, value=trend_label)
-        # Bold the attention-grabbing trends (Worsening / New issue);
-        # Improving / Resolved + Stable stay regular weight.
-        if trend_label in (_TREND_WORSENING, _TREND_NEW_ISSUE):
-            trend_cell.font = Font(bold=True)
 
         # Round 53 F1 (Move E) — render structured triplet + notes as
         # plain-English prose. Replaces the Round-51 prefix encoding for
@@ -2018,12 +2121,11 @@ def _write_monthly_sub_program_sheet(
         # canonical "force text" sigil. The apostrophe doesn't render
         # in Excel display but is preserved in the stored value, and
         # ``load_prior_period_comments`` strips it on read.
-        # F2: Comments moves from col 12 to col 14 (after the two
-        # percent columns shifted right by 2).
+        # Round 57: Comments at col 13 (was col 14 in F2 — Trend dropped).
         if prose and prose[0] in ("=", "+", "-", "@"):
-            comment_cell = ws.cell(row=row_idx, column=14, value="'" + prose)
+            comment_cell = ws.cell(row=row_idx, column=13, value="'" + prose)
         else:
-            comment_cell = ws.cell(row=row_idx, column=14, value=prose)
+            comment_cell = ws.cell(row=row_idx, column=13, value=prose)
         # Round 47: long commentary cells need wrap_text or they
         # overflow horizontally and push the print width past one page.
         comment_cell.alignment = Alignment(wrap_text=True, vertical="top")
@@ -2048,10 +2150,10 @@ def _write_monthly_sub_program_sheet(
         # AND the magnitude meets the dollar materiality floor —
         # mirrors the in-app row_style behaviour so a $50 over a $30
         # budget doesn't paint pink in the printed copy. Round 47.
-        # F2: extended to range(1, 15) paints cols 1..14 inclusive
-        # (the F2 layout has 14 cols including the new Trend column).
+        # Round 57: range(1, 14) paints cols 1..13 inclusive after
+        # Trend column dropped.
         if available < 0 and abs(available) >= materiality_dollar:
-            for col_idx in range(1, 15):
+            for col_idx in range(1, 14):
                 ws.cell(row=row_idx, column=col_idx).fill = _OVER_FILL
 
     # Freeze panes below the header so the column titles stay
@@ -2061,22 +2163,22 @@ def _write_monthly_sub_program_sheet(
     # F2 R1: explicit print_area pins what gets printed. Without this,
     # Excel's "Print Entire Workbook" mode (one-click in the print
     # dialog) would paginate both sheets and double the council
-    # paper trail.
+    # paper trail. Round 57: 13 cols (A:M) after Trend dropped.
     last_data_row = max(2, 2 + len(sub_programs))
-    ws.print_area = f"A1:N{last_data_row}"
+    ws.print_area = f"A1:M{last_data_row}"
 
     # F2 R1: AutoFilter + tab colour on the Watchlist sheet so the
     # council-targeted view is interactive and visually distinct.
     # F2 R2 fix: AutoFilter only when there are data rows to filter —
     # an empty Watchlist (every sub-program on track) was producing a
-    # degenerate "A2:N2" header-only filter that rendered an inert
+    # degenerate "A2:M2" header-only filter that rendered an inert
     # dropdown to a council reader.
     if filter_to_non_ok:
         # `filter_to_non_ok` is the Watchlist sheet's tell.
         # Tab colour = the canonical pink for "needs attention".
         ws.sheet_properties.tabColor = "F4CCCC"  # HL_MISMATCH
         if sub_programs:
-            ws.auto_filter.ref = f"A2:N{last_data_row}"
+            ws.auto_filter.ref = f"A2:M{last_data_row}"
 
     # Round 47 — print page setup. Without this the 12-column report
     # overflows portrait A4 onto 3-4 pages and rows split across page
@@ -2104,18 +2206,9 @@ def _write_monthly_sub_program_sheet(
         odd_header.center.text = f"Sub-Program Budget Report — {period_label}"
     if odd_footer is not None:
         if odd_footer.left is not None:
-            # F2 footer: when no prior-period XLSX was supplied, the
-            # Trend column is blank for every row. The footer note
-            # explains why so a reader doesn't think the column is
-            # broken. F2 R2 fix: shortened to ~53 chars (was 95) so
-            # the text fits the footer-left zone (~3.3" wide at
-            # landscape A4 0.4" margins) without wrapping or truncation.
-            # Drops the "Generated by School Tool" attribution when
-            # the warning is active — the warning is more useful info.
-            if prior_ytd is None:
-                odd_footer.left.text = "Trend needs a prior-period XLSX (none this run)"
-            else:
-                odd_footer.left.text = "Generated by School Tool"
+            # Round 57: the F2 trend-warning footer was dropped along
+            # with the Trend column. Always show the plain attribution.
+            odd_footer.left.text = "Generated by School Tool"
         if odd_footer.right is not None:
             odd_footer.right.text = "Page &P of &N"
 
@@ -2126,7 +2219,7 @@ def _write_watchlist_sheet(
     period_label: str,
     materiality_dollar: int = 5000,
     *,
-    prior_ytd: dict[str, Decimal] | None = None,
+    prior_funds: dict[str, Decimal] | None = None,
 ) -> None:
     """F2: write the Watchlist sheet — a filtered subset of the main
     sheet showing only sub-programs whose Status is not "On track",
@@ -2134,15 +2227,16 @@ def _write_watchlist_sheet(
 
     Council members read this sheet to find what needs attention
     without scanning past every healthy row in the main report. Same
-    14-column shape as the main sheet so a reader looking at a flagged
-    row finds the exact cell positions they're used to.
+    13-column shape as the main sheet (Round 57 dropped Trend) so a
+    reader looking at a flagged row finds the exact cell positions
+    they're used to.
     """
     _write_monthly_sub_program_sheet(
         ws,
         lines,
         period_label,
         materiality_dollar,
-        prior_ytd=prior_ytd,
+        prior_funds=prior_funds,
         filter_to_non_ok=True,
         sort_by_variance_desc=True,
         sheet_title_override="Watchlist — sub-programs needing attention",
@@ -2345,6 +2439,19 @@ def generate_report(
         materiality_dollar=materiality_dollar,
     )
 
+    # Round 57 — when a prior-period XLSX was supplied via the
+    # ``Prior-period comments`` picker, also pull the carry-forward
+    # field (``Funds from Previous Years``) per sub-program so the
+    # output workbook keeps that column populated across reports.
+    # Failure to read is non-fatal: an old comments-only file simply
+    # produces an empty dict and the column stays blank.
+    prior_funds: dict[str, Decimal] = {}
+    if comments_file is not None:
+        try:
+            prior_funds = load_prior_period_funds(comments_file)
+        except (ValueError, OSError, InvalidOperation):
+            prior_funds = {}
+
     if write_xlsx:
         progress(70, "Writing workbook...")
         _write_xlsx(
@@ -2353,6 +2460,7 @@ def generate_report(
             period_label=period_label,
             over_budget_threshold=over_budget_threshold,
             materiality_dollar=materiality_dollar,
+            prior_funds=prior_funds,
         )
     else:
         progress(70, "Preparing preview...")
@@ -2393,4 +2501,5 @@ def generate_report(
         revenue_threshold=revenue_threshold or over_budget_threshold,
         expense_threshold=expense_threshold or over_budget_threshold,
         materiality_dollar=materiality_dollar,
+        prior_funds=prior_funds,
     )

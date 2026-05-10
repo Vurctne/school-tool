@@ -577,6 +577,10 @@ class SubProgramBudgetReportTool:
                 output_file=output_path,
                 period_label=summary.period_label,
                 over_budget_threshold=threshold,
+                # Round 57 — propagate the prior-period Funds dict so
+                # the carry-forward column rolls forward across reports
+                # when the user supplied a prior-period XLSX.
+                prior_funds=summary.prior_funds,
             )
         except Exception as exc:
             try:

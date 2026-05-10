@@ -1032,6 +1032,25 @@ class SelectableList(tk.Frame):
         self._inner.bind("<Configure>", self._on_inner_configure)
         self._canvas.bind("<Configure>", self._on_canvas_configure)
 
+        # Round 57 — mouse-wheel scroll. Scope via <Enter>/<Leave> so
+        # we only intercept wheel events while the cursor is over THIS
+        # canvas (otherwise the binding would steal scroll from sibling
+        # widgets like the log panel or the result table).
+        def _on_mousewheel(event: Any) -> None:
+            try:
+                self._canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            except tk.TclError:
+                pass
+
+        self._canvas.bind(
+            "<Enter>",
+            lambda _e: self._canvas.bind_all("<MouseWheel>", _on_mousewheel),
+        )
+        self._canvas.bind(
+            "<Leave>",
+            lambda _e: self._canvas.unbind_all("<MouseWheel>"),
+        )
+
         # Keyboard navigation
         self._canvas.configure(takefocus=True)
         self._canvas.bind("<Up>", lambda e: self._nav(-1))
