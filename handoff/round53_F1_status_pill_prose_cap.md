@@ -210,11 +210,87 @@ Other deferred items from Round 52's brief:
 
 ## Status
 
-- 12 R1 fixes applied + 17 regression tests pin them.
+- 12 R1 fixes applied + 17 R1 regression tests pin them.
+- 10 R2 fixes applied (see below) + 13 R2 regression tests.
 - 2.3.1.0 ready for `pwsh msix\build_msix_package.ps1 -StoreUpload`
   on Windows.
 - Brief at [handoff/round52_output_redesign_brief.md](round52_output_redesign_brief.md)
   documents F2 + F3.
 - Round 52 brief's F1 phase is COMPLETE.
+
+---
+
+## Round 2 — second 4-Opus pass
+
+User: "run another 4 opus test agent". Same 4 lenses with
+variance-analysis-purist replacing test-coverage-auditor for a
+fresh angle.
+
+**Round 2 lenses:**
+- Logic skeptic — verify R1 fixes hold + find collisions
+- UX critic — re-verify after fixes
+- Excel QA — re-verify print + style
+- Variance-analysis purist (new) — score F1 against the skill's
+  methodology framework
+
+**10 R2 fixes applied:**
+
+| # | Severity | Source | Finding | Fix |
+|---|---|---|---|---|
+| 1 | P0 UX | UX critic | `(no commentary recorded)` reads as system-archive, not BM action item | Differentiate by status: `Action needed: add commentary.` for Urgent/Significant/Spent-without-budget; keep `(no commentary recorded)` for No-spend-yet (absence IS the literal point) |
+| 2 | P1 Logic | Logic | `Spent without budget` misfires on programs collecting revenue without budget | Tighten gate: also require `rev_ytd == 0` |
+| 3 | P1 Logic | Logic | Donation programs (rev_b=0, rev_y>0) bypass pacing-aware path | Drop `rev_ytd==0` from `is_expenditure_only` gate |
+| 4 | P1 Logic | Logic | `Investigating + Improving` not in contradiction set | Added `("Investigating", "Improving")` to `_CONTRADICTORY_DRIVER_OUTLOOK` |
+| 5 | P1 UX | UX | "Driver under investigation. Needs investigation." is repetitive | Drop action when (Investigating, Investigate) — added to `_CONTRADICTORY_DRIVER_ACTION` |
+| 6 | P1 UX | UX | "Driver under investigation, improving" parses ambiguously | Special-case: when driver=Investigating AND outlook set, render as 2 sentences ("Driver under investigation. Variance improving.") |
+| 7 | P1 V-skill | V-skill | Materiality floor is dollar-only — skill prescribes "either exceeded" | Added percent floor (>50% over budget) AND $500 hard noise floor (preserves "$50 over $30 stationery" exemption) |
+| 8 | P1 Logic | Logic | Pacing under-spend masks `No spend yet` trickle case ($100 on $50K) | Tightened `No spend yet` to `exp_ytd < min(materiality_dollar, 5% of budget)` |
+| 9 | P1 Excel | Excel QA | Pacing path ignores outstanding orders → Admin row mis-classified On track | Pacing now uses `committed = rev_ytd - available` (= exp_ytd + orders) |
+| 10 | P1 Excel | Excel QA | Print width 248 char-units / ~277 usable = 90% — compression risk | Comments column 50 → 40 (total drops to 238) |
+
+**4 R2 deferrals** documented for future rounds:
+- Driver=Timing-* with empty Notes is a named anti-pattern in the
+  skill — needs UI change (Notes-required flag), not renderer
+- Quantification missing in prose — needs renderer signature change
+  to access dollar/pct values; defer to F2
+- Status column at col 13 (UX critic recommended col 3 again) —
+  defer to F2 when restructuring anyway
+- Cell comment loss on `read_only=True` openpyxl reads — only
+  matters if a downstream consumer reads via that path
+
+---
+
+## Quality gates after R2
+
+```
+ruff format --check .                       # 79/79 ok
+ruff check .                                # All checks passed!
+mypy --strict --cache-dir=/tmp/mypy_cache tools/sub_program/
+                                            # 0 new errors
+pytest tools/sub_program/tests/ tests/test_shell_clear.py
+                                            # 217 passed, 2 skipped
+                                            # 9 fail / 15 error env-only
+                                            # baseline (missing PDF)
+```
+
+Test count went from R1's 204 → R2's 217 = **+13 R2 regression tests**.
+
+---
+
+## Final F1 + R1 + R2 statistics
+
+- 4 logic functions added: `compute_status_pill`, `render_commentary_prose`,
+  `cap_percent_for_display`, `_capitalize_first` / `_ensure_terminal_period`
+  helpers
+- 70+ tests across 5 test classes:
+  - `TestStatusPill` (12)
+  - `TestCommentaryProse` (11)
+  - `TestPercentCap` (7)
+  - `TestF1XlsxIntegration` (7)
+  - `TestF1Round1Fixes` (17)
+  - `TestF1Round2Fixes` (13) **new**
+- 22 fixes total across both rounds (12 R1 + 10 R2)
+- ~480 lines added to `tools/sub_program/logic.py`
+- ~1,500 lines added to `tools/sub_program/tests/test_logic.py`
 
 — end of round —

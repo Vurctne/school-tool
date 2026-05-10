@@ -290,14 +290,26 @@ def compute_status_pill(
     # Spent without budget — capital-spend-without-approval flag.
     # R1 fix: tightened gate — must have NO budget on either side.
     # A fundraiser with rev_b > 0, exp_b == 0 is NOT unbudgeted.
-    if annual_exp_budget == 0 and annual_rev_budget == 0 and exp_ytd > 0:
+    # R2 fix: also require ``rev_ytd == 0``. A program collecting
+    # revenue but with zero budget on either side is a configuration
+    # mistake (someone forgot to add the budget) — surfacing it as
+    # "Spent without budget" alongside its visible revenue collection
+    # reads as contradictory to a council member.
+    if annual_exp_budget == 0 and annual_rev_budget == 0 and rev_ytd == 0 and exp_ytd > 0:
         return _STATUS_SPENT_WITHOUT_BUDGET
 
     # No spend yet — placeholder past 25% of year.
+    # R2 fix: loosened the ``exp_ytd == 0`` strict gate to a fractional
+    # threshold capped at the dollar materiality floor — captures the
+    # trickle case (e.g. $100 spent on a $50K budget at 33% calendar)
+    # without false-positives on normally-paced small programs ($3,500
+    # on $10K at 33% calendar is healthy, not "no spend yet"). The
+    # threshold = min(materiality_dollar, 5% of annual_exp_budget).
+    spend_threshold = min(mat, annual_exp_budget * Decimal("0.05"))
     if (
         annual_exp_budget > mat
-        and exp_ytd == 0
-        and rev_ytd == 0
+        and exp_ytd < spend_threshold
+        and rev_ytd < spend_threshold
         and calendar_pct > _NO_SPEND_CALENDAR_THRESHOLD
     ):
         return _STATUS_NO_SPEND_YET
@@ -308,9 +320,23 @@ def compute_status_pill(
     # reads as deficit, even when the program is perfectly on pace.
     # We compare actual spend pace to calendar pace: if exp_ytd / eb
     # is within ±15% of calendar_pct / 100, the line is on track.
-    is_expenditure_only = annual_rev_budget == 0 and rev_ytd == 0 and annual_exp_budget > 0
+    # R2 fix: dropped the ``rev_ytd == 0`` requirement. A donation-
+    # funded program (rev_b == 0 but rev_ytd > 0) belongs in this
+    # branch too — its expenditure side is what we're pacing against.
+    is_expenditure_only = annual_rev_budget == 0 and annual_exp_budget > 0
     if is_expenditure_only and calendar_pct > 0:
-        actual_pace = exp_ytd / annual_exp_budget
+        # R2 fix: pacing uses the COMMITTED amount (exp_ytd + outstanding
+        # orders), not just exp_ytd. Outstanding orders bind budget the
+        # same way actual spend does. Without this fix, an Admin-style
+        # row with $192K spent + $1.7M orders on a $582K budget reads
+        # as "33% of budget consumed" (matching calendar) and
+        # mis-classifies as "On track" — when in reality the program
+        # is committed to ~$1.9M of spend (3.3× budget). The committed
+        # amount is reconstructible without an extra parameter:
+        # committed = rev_ytd - available  (since available =
+        # rev_ytd - exp_ytd - oo, so oo + exp_ytd = rev_ytd - available).
+        committed = rev_ytd - available
+        actual_pace = committed / annual_exp_budget
         expected_pace = Decimal(str(calendar_pct)) / Decimal("100")
         pace_gap = actual_pace - expected_pace
         # Within 15% pacing band -> on track. The 15% band gives a
@@ -323,7 +349,7 @@ def compute_status_pill(
         # rather than the raw available signal.
         if pace_gap > 0:
             # Over-pacing.
-            overrun = exp_ytd - (annual_exp_budget * expected_pace)
+            overrun = committed - (annual_exp_budget * expected_pace)
             pct_over = pace_gap * Decimal("100")
             if overrun >= mat:
                 if overrun > _STATUS_URGENT_DOLLAR or pct_over > _STATUS_URGENT_PCT:
@@ -341,17 +367,23 @@ def compute_status_pill(
         return _STATUS_ON_TRACK
 
     overrun = -available  # positive number
-    if overrun < mat:
-        # Below materiality dollar floor — "$50 over $30 stationery"
-        # case. Not a council issue.
+    # R2 fix: hard $500 noise floor — chart-of-accounts placeholder
+    # rows ($50 over a $30 stationery budget = 167% over but $50
+    # absolute) are below council attention regardless of percent.
+    # This sits BELOW the regular dollar/percent floors: "below
+    # noise" wins.
+    if overrun < Decimal("500"):
         return _STATUS_ON_TRACK
-
-    # Compute overrun as percent of expenditure budget. When budget is
-    # zero we already returned earlier; safe to divide here.
-    if annual_exp_budget > 0:
-        pct_over = overrun / annual_exp_budget * Decimal("100")
-    else:
-        pct_over = Decimal("0")
+    # Compute overrun as percent of expenditure budget once.
+    pct_over = (
+        (overrun / annual_exp_budget * Decimal("100")) if annual_exp_budget > 0 else Decimal("0")
+    )
+    # R2 fix: materiality floor now uses BOTH dollar AND percent (skill
+    # rule: "either exceeded"). A $4K overrun on a $200 budget = 2,000%
+    # over and IS material; a $5K overrun on a $50K budget = 10% over
+    # → below both floors → On track.
+    if overrun < mat and pct_over <= Decimal("50"):
+        return _STATUS_ON_TRACK
 
     if overrun > _STATUS_URGENT_DOLLAR or pct_over > _STATUS_URGENT_PCT:
         return _STATUS_URGENT
@@ -419,6 +451,11 @@ _CONTRADICTORY_DRIVER_OUTLOOK: frozenset[tuple[str, str]] = frozenset(
         ("Structural", "One-time"),
         # One-time variance "expected to continue" — definitionally wrong.
         ("One-time", "Expected to continue"),
+        # R2 fix: "we don't know what's driving this AND we know it's
+        # getting better" reads as incoherent. ``Investigating`` +
+        # ``Deteriorating`` is fine ("we don't know why but it's
+        # getting worse").
+        ("Investigating", "Improving"),
     }
 )
 
@@ -429,6 +466,11 @@ _CONTRADICTORY_DRIVER_ACTION: frozenset[tuple[str, str]] = frozenset(
         # "Driver under investigation" + "no action needed" is a direct
         # contradiction — investigating IS an action.
         ("Investigating", "None"),
+        # R2 fix: "Driver under investigation. Needs investigation." is
+        # repetitive — same word root in two sentences. The driver
+        # phrase already implies the investigation; drop the
+        # action_prose.
+        ("Investigating", "Investigate"),
     }
 )
 
@@ -472,20 +514,30 @@ def render_commentary_prose(
     # R1 fix: replaced em-dash splice ("description — action") with two
     # short sentences ("description. Action."). Reads as natural
     # English instead of template output.
-    desc_pieces: list[str] = []
-    if driver_prose:
-        desc_pieces.append(driver_prose)
-    if outlook_prose:
-        if desc_pieces:
-            desc_pieces.append(outlook_prose)
-        else:
-            # Outlook leads — "Outlook improving."
-            desc_pieces.append("Outlook " + outlook_prose)
-    description = ", ".join(desc_pieces)
-
     sentences: list[str] = []
-    if description:
-        sentences.append(_ensure_terminal_period(_capitalize_first(description)))
+
+    # R2 fix: when ``Investigating`` driver and outlook are both set,
+    # the comma-joined form ("Driver under investigation, improving")
+    # parses ambiguously — "improving" attaches to "investigation"
+    # rather than to the variance. Render as two unambiguous
+    # sentences instead.
+    if driver == "Investigating" and outlook_prose and driver_prose:
+        sentences.append(_ensure_terminal_period(_capitalize_first(driver_prose)))
+        sentences.append(_ensure_terminal_period(_capitalize_first("variance " + outlook_prose)))
+    else:
+        desc_pieces: list[str] = []
+        if driver_prose:
+            desc_pieces.append(driver_prose)
+        if outlook_prose:
+            if desc_pieces:
+                desc_pieces.append(outlook_prose)
+            else:
+                # Outlook leads — "Outlook improving."
+                desc_pieces.append("Outlook " + outlook_prose)
+        description = ", ".join(desc_pieces)
+        if description:
+            sentences.append(_ensure_terminal_period(_capitalize_first(description)))
+
     if action_prose:
         sentences.append(_ensure_terminal_period(_capitalize_first(action_prose)))
     if notes:
@@ -1666,7 +1718,13 @@ def _write_monthly_sub_program_sheet(
         # see which sub-programs need attention.
         "Status",
     ]
-    widths = [8, 32, 14, 16, 22, 14, 14, 14, 16, 12, 14, 50, 22]
+    # R2 fix: Comments width reduced 50 → 40 to relieve print-width
+    # compression risk. Total widths sum 248 → 238 char-units; landscape
+    # A4 fit-to-width has ~277 char-units of usable space at default
+    # margins, so the new 238 leaves ~14% margin (was 11%). Long prose
+    # still wraps via wrap_text — just to slightly taller rows, which
+    # the row-height heuristic handles.
+    widths = [8, 32, 14, 16, 22, 14, 14, 14, 16, 12, 14, 40, 22]
     for col_idx, (header, width) in enumerate(zip(headers, widths, strict=True), start=1):
         cell = ws.cell(row=2, column=col_idx, value=header)
         cell.font = Font(bold=True)
@@ -1802,7 +1860,17 @@ def _write_monthly_sub_program_sheet(
             _STATUS_SPENT_WITHOUT_BUDGET,
             _STATUS_NO_SPEND_YET,
         ):
-            prose = "(no commentary recorded)"
+            # R2 fix: differentiate the auto-fill text by status. A
+            # parenthesised "(no commentary recorded)" reads as
+            # archival absence to a council reader — passive, system-
+            # noted. For genuinely-attention statuses we want an
+            # imperative cue that the BM has a to-do. ``No spend yet``
+            # is left as the parenthesised form because the absence
+            # IS the literal point (the program hasn't transacted).
+            if status == _STATUS_NO_SPEND_YET:
+                prose = "(no commentary recorded)"
+            else:
+                prose = "Action needed: add commentary."
         # Defensive Excel-formula-injection guard. A user typing
         # ``=SUM(...)`` etc. into Notes would otherwise get
         # auto-evaluated by Excel on file open, surfacing as ``#NAME?``
@@ -1825,7 +1893,11 @@ def _write_monthly_sub_program_sheet(
         # on print. Default Excel row height is 15pt — shows only the
         # first line. Heuristic: ~50 chars per visual line at column
         # width 50, ~15pt per line.
-        col_12_width = 50
+        # R2 fix: Comments column width is 40 (was 50 in F1; reduced
+        # to relieve print-width compression). Row-height heuristic
+        # tracks the same width so multi-line prose still gets the
+        # correct row height for print.
+        col_12_width = 40
         prose_visual_lines = max(1, (len(prose) + col_12_width - 1) // col_12_width)
         if prose_visual_lines > 1:
             ws.row_dimensions[row_idx].height = 15 * prose_visual_lines

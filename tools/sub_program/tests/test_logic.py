@@ -2163,10 +2163,13 @@ class TestF1Round1Fixes:
 
     def test_xlsx_auto_fills_empty_comments_for_urgent_rows(self, tmp_path: Path) -> None:
         """R1 fix: when Status is Urgent / Significant / Spent-without-
-        budget / No-spend-yet AND Comments is empty, auto-fill with
-        '(no commentary recorded)' so the cell doesn't print as a
-        contradiction (urgent status with blank Comments looks like
-        the BM ignored the alert)."""
+        budget / No-spend-yet AND Comments is empty, auto-fill so the
+        cell doesn't print as a contradiction.
+        R2 fix: differentiated by status — Urgent/Material/Spent
+        without budget get the imperative 'Action needed: add
+        commentary.' (signals BM has a to-do); No-spend-yet keeps
+        '(no commentary recorded)' (the absence IS the literal
+        point)."""
         rev = SubProgramLine(
             sub_program="7001",
             account="Revenue",
@@ -2196,7 +2199,8 @@ class TestF1Round1Fixes:
         status = ws.cell(row=3, column=13).value
         comments = ws.cell(row=3, column=12).value
         assert status == "Investigate urgently"
-        assert comments == "(no commentary recorded)"
+        # R2 fix: imperative cue for non-OK statuses (was archival).
+        assert comments == "Action needed: add commentary."
 
     def test_prose_round_trip_through_decode_commentary(self) -> None:
         """R1 regression test: a prose cell from R53+ fed back through
@@ -2327,3 +2331,292 @@ class TestF1Round1Fixes:
         )
         assert on_25 == "On track"
         assert on_25_plus == "No spend yet"
+
+
+# ---------------------------------------------------------------------------
+# Round 53 F1 R2 — regression tests for the 10 R2 fixes applied after the
+# second 4-Opus-agent review. Pin the new behaviour against future drift.
+# ---------------------------------------------------------------------------
+
+
+class TestF1Round2Fixes:
+    """Targeted tests for the R2 fixes (logic, prose, writer)."""
+
+    def test_investigating_improving_is_contradictory(self) -> None:
+        """R2 fix: ``Investigating + Improving`` is incoherent — 'we
+        don't know what's driving this AND it's improving' — outlook
+        is dropped."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(driver="Investigating", outlook="Improving")
+            == "Driver under investigation."
+        )
+
+    def test_investigating_deteriorating_keeps_outlook(self) -> None:
+        """R2 fix: ``Investigating + Deteriorating`` is coherent —
+        'we don't know why but it's getting worse'."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        result = render_commentary_prose(driver="Investigating", outlook="Deteriorating")
+        # Per the R2 special-case: Investigating + outlook splits into
+        # two unambiguous sentences.
+        assert "Driver under investigation." in result
+        assert "Variance deteriorating." in result
+
+    def test_investigating_investigate_drops_action(self) -> None:
+        """R2 fix: 'Driver under investigation. Needs investigation.' is
+        repetitive — same word root in both sentences. Action dropped."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        assert (
+            render_commentary_prose(driver="Investigating", action="Investigate")
+            == "Driver under investigation."
+        )
+
+    def test_investigating_with_outlook_renders_two_sentences(self) -> None:
+        """R2 fix: ``Investigating`` driver + outlook used to comma-join
+        as 'Driver under investigation, improving' — ambiguous (does
+        the driver improve, or the variance?). Now splits into 2
+        unambiguous sentences."""
+        from tools.sub_program.logic import render_commentary_prose
+
+        # Improving is now in the contradictory set, so use Deteriorating.
+        result = render_commentary_prose(
+            driver="Investigating", outlook="Deteriorating", action="Monitor"
+        )
+        assert result == "Driver under investigation. Variance deteriorating. Being monitored."
+
+    def test_spent_without_budget_excludes_revenue_collection(self) -> None:
+        """R2 fix: ``Spent without budget`` requires rev_ytd == 0 too.
+        A program with $0 budget on both sides BUT collecting revenue
+        is a configuration mistake (forgot to budget), not unauthorised
+        spend — surfacing it as 'Spent without budget' alongside its
+        visible revenue reads as contradictory to a council reader."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("4000"),  # collected more than spent
+                annual_exp_budget=Decimal("0"),
+                annual_rev_budget=Decimal("0"),
+                rev_ytd=Decimal("5000"),  # rev collected — not unbudgeted
+                exp_ytd=Decimal("1000"),
+            )
+            != "Spent without budget"
+        )
+
+    def test_donation_program_uses_pacing_path(self) -> None:
+        """R2 fix: ``is_expenditure_only`` no longer requires
+        ``rev_ytd == 0`` — a program with rev_b = 0 but rev_y > 0
+        (donations / unbudgeted grants) is still expenditure-pacing
+        analysed, not falling through to the raw available signal."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # Donation $5K received but program is on pace (33% spent at
+        # 33% calendar) — pacing path returns On track despite the
+        # $1.5K negative available reading from naive math.
+        result = compute_status_pill(
+            available=Decimal("1500"),  # $5K rev - $3.5K exp
+            annual_exp_budget=Decimal("10000"),
+            annual_rev_budget=Decimal("0"),  # unbudgeted donation
+            rev_ytd=Decimal("5000"),
+            exp_ytd=Decimal("3500"),
+            calendar_pct=33.3,
+        )
+        assert result == "On track"
+
+    def test_pacing_path_uses_committed_amount(self) -> None:
+        """R2 fix: pacing uses (exp_ytd + outstanding_orders), not just
+        exp_ytd. The Admin-style sub-program ($192K spent + $1.7M orders
+        on $582K budget, $26K incidental rev) reads as 3.3× committed
+        — way beyond the ±15% pacing band → Investigate urgently.
+        Without this fix, pacing would say 33% = on calendar = On
+        track, hiding $1.7M of unfunded orders."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # available = rev_y - exp_y - oo = 26436 - 192126 - 1732527
+        result = compute_status_pill(
+            available=Decimal("-1898217"),
+            annual_exp_budget=Decimal("581700"),
+            annual_rev_budget=Decimal("0"),  # admin = no rev budget
+            rev_ytd=Decimal("26436"),
+            exp_ytd=Decimal("192126"),
+            calendar_pct=33.3,
+        )
+        # Committed = rev_ytd - available = 26436 - (-1898217) = 1924653
+        # Pace = 1924653 / 581700 = 3.31 → way over
+        # Pace gap = +2.97 → outside ±15% band
+        # Overrun = 1924653 - (581700 * 0.333) = 1924653 - 193706 = ~$1.73M
+        # Pct over = 297% → Investigate urgently
+        assert result == "Investigate urgently"
+
+    def test_no_spend_yet_uses_fractional_threshold(self) -> None:
+        """R2 fix: ``No spend yet`` gate is now ``exp_ytd < min(mat,
+        5% of budget)`` — captures the trickle case ($100 on $50K)
+        without false-positives on small-budget normal-pacing programs
+        ($3,500 on $10K).
+        """
+        from tools.sub_program.logic import compute_status_pill
+
+        # Trickle case: $100 on $50K at 33% — pace = 0.2%, vastly
+        # under-paced. spend_threshold = min($5K, $50K * 0.05) = $2.5K.
+        # $100 < $2.5K → No spend yet.
+        trickle = compute_status_pill(
+            available=Decimal("-100"),
+            annual_exp_budget=Decimal("50000"),
+            annual_rev_budget=Decimal("0"),
+            rev_ytd=Decimal("0"),
+            exp_ytd=Decimal("100"),
+            calendar_pct=33.3,
+        )
+        assert trickle == "No spend yet"
+        # Normal small-budget case: $3500 on $10K at 33% — pace = 35%,
+        # within ±15% pacing band. spend_threshold = min($5K, $500) =
+        # $500. $3500 > $500 → does NOT fire No spend yet.
+        normal = compute_status_pill(
+            available=Decimal("-3500"),
+            annual_exp_budget=Decimal("10000"),
+            annual_rev_budget=Decimal("0"),
+            rev_ytd=Decimal("0"),
+            exp_ytd=Decimal("3500"),
+            calendar_pct=33.3,
+        )
+        assert normal == "On track"
+
+    def test_noise_floor_500_dollars(self) -> None:
+        """R2 fix: hard $500 noise floor regardless of percent. A $50
+        overrun on a $30 stationery budget = 167% over but $50 absolute
+        — chart-of-accounts placeholder, not council attention."""
+        from tools.sub_program.logic import compute_status_pill
+
+        assert (
+            compute_status_pill(
+                available=Decimal("-50"),
+                annual_exp_budget=Decimal("30"),
+                rev_ytd=Decimal("0"),
+                exp_ytd=Decimal("80"),
+            )
+            == "On track"
+        )
+
+    def test_percent_floor_above_50pct(self) -> None:
+        """R2 fix: percent floor — overrun > 50% of budget surfaces
+        even if dollar < $5K materiality. A $4K overrun on a $200
+        budget is 2,000% over and IS material."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # Overrun $4K on $200 budget = 2,000%. Above $500 noise floor
+        # AND above 50% pct → escapes both floors → bucket logic.
+        # $4K < $25K Material dollar but pct > 50 → Urgent.
+        result = compute_status_pill(
+            available=Decimal("-4000"),
+            annual_exp_budget=Decimal("200"),
+            rev_ytd=Decimal("0"),
+            exp_ytd=Decimal("4200"),
+        )
+        assert result == "Investigate urgently"
+
+    def test_xlsx_no_spend_yet_uses_archival_message(self, tmp_path: Path) -> None:
+        """R2 fix: ``No spend yet`` keeps the archival ``(no commentary
+        recorded)`` auto-fill — the absence IS the literal point.
+        Other non-OK statuses get the imperative ``Action needed: add
+        commentary.``"""
+        rev = SubProgramLine(
+            sub_program="8330",
+            account="Revenue",
+            description="Camp",
+            budget=Decimal("10000"),
+            ytd=Decimal("0"),
+            remaining=Decimal("10000"),
+            used_pct=Decimal("0"),
+            faculty="Programs & Camps",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="8330",
+            account="Expenditure",
+            description="Camp",
+            budget=Decimal("10000"),
+            ytd=Decimal("0"),
+            remaining=Decimal("10000"),
+            used_pct=Decimal("0"),
+            faculty="Programs & Camps",
+            is_over=False,
+        )
+        out = tmp_path / "nospend_autofill.xlsx"
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=3, column=13).value == "No spend yet"
+        # No-spend-yet keeps the parenthesised archival form because the
+        # absence of commentary IS the literal point — there's nothing
+        # for the BM to add.
+        assert ws.cell(row=3, column=12).value == "(no commentary recorded)"
+
+    def test_xlsx_comments_width_reduced_to_40(self, tmp_path: Path) -> None:
+        """R2 fix: Comments column width 50 → 40 to relieve print-width
+        compression. Total widths sum drops from 248 to 238 char-units,
+        leaving more margin under landscape A4 fit-to-width."""
+        out = tmp_path / "width.xlsx"
+        line = SubProgramLine(
+            sub_program="4001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("5000"),
+            remaining=Decimal("5000"),
+            used_pct=Decimal("50"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([line], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        # Column 12 is Comments; Excel column letter "L".
+        assert ws.column_dimensions["L"].width == 40
+
+    def test_xlsx_capped_marker_with_pink_fill_and_text_format(self, tmp_path: Path) -> None:
+        """R2 regression test: a row that's both materially over AND
+        carries a capped percent renders the ``>999%`` text marker WITH
+        ``@`` text format AND HL_MISMATCH pink fill — three style
+        attributes simultaneously."""
+        from toolkit.tokens import HL_MISMATCH
+
+        # Engineer a row with rev_pct way over 999% AND a material
+        # available-deficit so all three style channels apply.
+        rev = SubProgramLine(
+            sub_program="9001",
+            account="Revenue",
+            description="Test",
+            budget=Decimal("100"),
+            ytd=Decimal("3000"),  # 30x over
+            remaining=Decimal("-2900"),
+            used_pct=Decimal("3000"),
+            faculty="Programs & Camps",
+            is_over=True,
+        )
+        exp = SubProgramLine(
+            sub_program="9001",
+            account="Expenditure",
+            description="Test",
+            budget=Decimal("10000"),
+            ytd=Decimal("60000"),  # $50K over → urgent + pink
+            remaining=Decimal("-50000"),
+            used_pct=Decimal("600"),
+            faculty="Programs & Camps",
+            is_over=True,
+        )
+        out = tmp_path / "tri_style.xlsx"
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        rev_pct_cell = ws.cell(row=3, column=11)
+        # Capped marker.
+        assert rev_pct_cell.value == ">999%"
+        # Text format.
+        assert rev_pct_cell.number_format == "@"
+        # Pink fill (row is materially over, so the pink-fill loop
+        # paints col 11 too).
+        rgb = rev_pct_cell.fill.fgColor.rgb if rev_pct_cell.fill.fgColor is not None else None
+        assert rgb is not None and HL_MISMATCH in rgb.upper()
