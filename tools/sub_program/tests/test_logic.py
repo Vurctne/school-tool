@@ -195,10 +195,29 @@ class TestParseSamplePdf:
         assert match.last_year_budget == Decimal("10205")
         assert match.last_year_actual == Decimal("10107")
 
-    def test_unbudgeted_spend_row_parses_correctly(self, lines: list[SubProgramLine]) -> None:
-        """Round 58 regression: ensure the existing single-pre-token
-        unbudgeted-spend case still works. 8505 School Saving Bonus
-        has $255,751 spend with no budget allocation."""
+    def test_unbudgeted_spend_row_with_negative_avail(self, lines: list[SubProgramLine]) -> None:
+        """Round 60: an unbudgeted-spend row has 1 pre token (the YTD)
+        AND ≥1 post token (the negative Available Balance produced
+        by that spend). 8650 Rowing Program "(See 8599)" paid out
+        $26,924 with no budget; PDF reads ``26,924 0.00 -26,924``."""
+        match = next(
+            (
+                ln
+                for ln in lines
+                if ln.sub_program == "8650" and ln.account.startswith("Expenditure")
+            ),
+            None,
+        )
+        assert match is not None, "Sub-program 8650 Expenditure missing"
+        assert match.budget == Decimal("0")
+        assert match.ytd == Decimal("26924")
+
+    def test_last_year_only_row_parses_with_zero_current(self, lines: list[SubProgramLine]) -> None:
+        """Round 60: 8505 School Saving Bonus has 1 pre token ($255,751)
+        and 0 post tokens. Per the KMAR reference workbook, that
+        pattern means LY_actual only — no current-year revenue,
+        expense, or available balance. Pre-R60 the parser misread
+        this as unbudgeted spend (ytd=$255,751)."""
         match = next(
             (
                 ln
@@ -208,8 +227,11 @@ class TestParseSamplePdf:
             None,
         )
         assert match is not None, "Sub-program 8505 Expenditure missing"
-        assert match.budget == Decimal("0")
-        assert match.ytd == Decimal("255751")
+        assert match.budget == Decimal("0"), f"8505 budget should be $0; got ${match.budget}"
+        assert match.ytd == Decimal("0"), (
+            f"8505 YTD should be $0 (LY-only history); got ${match.ytd}"
+        )
+        assert match.last_year_actual == Decimal("255751")
 
 
 # ---------------------------------------------------------------------------

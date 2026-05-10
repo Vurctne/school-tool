@@ -1081,10 +1081,26 @@ def _build_line(
         if len(pre) >= 4:
             last_year_actual = parse_decimal(pre[-4])
     elif len(pre) == 1:
-        # Only one token before %: unbudgeted spend (e.g. 8505 School
-        # Saving Bonus). The single value is YTD; budget is zero.
-        ytd = parse_decimal(pre[-1])
-        budget = Decimal("0")
+        # Round 60 — distinguish two single-pre-token shapes:
+        #   (a) unbudgeted spend (1 pre + ≥1 post): the post token
+        #       is the negative Available Balance produced by the
+        #       spend. The pre token IS the YTD (e.g. 8650 Rowing
+        #       Program "(See 8599)" with $26,924 spent against $0
+        #       budget, post=[-26,924]).
+        #   (b) last-year history only (1 pre + 0 post): no current-
+        #       year activity at all. The pre token is LY_actual
+        #       (e.g. 8505 School Saving Bonus with $255,751 from
+        #       last year and no current-year revenue/expense). The
+        #       PDF only shows LY_actual + 0.00% — KMAR reference
+        #       confirms budget=0, YTD=0 for these.
+        if post:
+            # Case (a): unbudgeted spend.
+            ytd = parse_decimal(pre[-1])
+            budget = Decimal("0")
+        else:
+            # Case (b): LY_actual only; no current-year activity.
+            last_year_actual = parse_decimal(pre[-1])
+            # ytd, budget, last_year_budget all stay 0 (defaults).
     # else: empty pre — both remain 0 (degenerate row, leave defaults)
 
     # Outstanding orders: only meaningful for Expenditure rows.
@@ -1864,6 +1880,13 @@ def _write_monthly_sub_program_sheet(
     exp_y: dict[str, Decimal] = {}
     orders: dict[str, Decimal] = {}
     desc: dict[str, str] = {}
+    # Round 60 — track which sub-programs have ANY constituent line
+    # (Revenue OR Expenditure) flagged as is_over+is_material. The
+    # in-app Watchlist filters on this exact signal per-line; the
+    # XLSX writer aggregates that to "is THIS sub-program on the
+    # Watchlist?" so the pink fill + Watchlist sheet match the
+    # in-app view exactly.
+    sps_on_watchlist: set[str] = set()
     # Round 51 Phase D Round-1 fix — atomic per-sub-program commentary
     # aggregation. Pre-fix the four fields (notes / driver / outlook /
     # action) were each independently "first non-empty wins" across
@@ -1887,6 +1910,15 @@ def _write_monthly_sub_program_sheet(
             # across all expenditure account-rows for the sub-program.
             if ln.outstanding_orders:
                 orders[sp] = orders.get(sp, Decimal("0")) + ln.outstanding_orders
+        # Round 60 — match in-app Watchlist filter: this sub-program
+        # is on the Watchlist if ANY of its lines is over+material.
+        # Recompute is_material in-place so synthetic callers (tests,
+        # direct _write_xlsx invocations) don't need to call
+        # _recompute_is_over first to populate the flag — the writer
+        # is self-contained against materiality_dollar.
+        is_material_now = abs(ln.ytd - ln.budget) >= Decimal(str(materiality_dollar))
+        if ln.is_over and is_material_now:
+            sps_on_watchlist.add(sp)
         # First non-empty description / commentary wins (consistent
         # with how the in-app Combined view picks its description).
         if ln.description and sp not in desc:
@@ -1905,11 +1937,12 @@ def _write_monthly_sub_program_sheet(
 
     sub_programs = sorted(set(rev_b.keys()) | set(exp_b.keys()))
 
-    # F2: optional filter / re-sort for the Watchlist sheet. We
-    # compute Status + available per sub-program once here, drop
-    # On-track rows when filtering, and re-sort by absolute variance
-    # descending (largest concerns first — variance-analysis skill
-    # rule for investigation priority).
+    # Round 60 — Watchlist sheet filter follows the in-app Watchlist
+    # tab exactly. The in-app filters on per-line ``is_over and
+    # is_material``; ``sps_on_watchlist`` (built above) is the
+    # aggregated set of sub-programs with at least one such line.
+    # Pre-R60 the filter used ``status != "On track"`` which checks
+    # only the Expenditure side and missed Revenue-over-budget rows.
     if filter_to_non_ok or sort_by_variance_desc:
         annotated: list[tuple[str, Decimal, str]] = []  # (sp, available, status)
         for sp in sub_programs:
@@ -1928,7 +1961,7 @@ def _write_monthly_sub_program_sheet(
             )
             annotated.append((sp, avail, status))
         if filter_to_non_ok:
-            annotated = [t for t in annotated if t[2] != _STATUS_ON_TRACK]
+            annotated = [t for t in annotated if t[0] in sps_on_watchlist]
         if sort_by_variance_desc:
             # R1 fix: sort by SIGNED available ascending so the most
             # negative (worst overspends) lead and the most positive
@@ -2192,19 +2225,19 @@ def _write_monthly_sub_program_sheet(
         if prose_visual_lines > 1:
             ws.row_dimensions[row_idx].height = 15 * prose_visual_lines
 
-        # Round 58 — pink fill follows Status, not the raw Available
-        # Balance signal. Pre-R58 the fill fired on
-        # ``available < 0 and abs(available) >= materiality_dollar``
-        # which painted MANY On-track rows red: programs that spend at
-        # the expected rate but whose revenue arrives in lumps (parent
-        # payments at the start of term, government instalments) sit
-        # at ``available < 0`` for half the year while Status correctly
-        # reads "On track". After Round 56's pacing-free Status
-        # contract, the two signals diverged and the pink fill was
-        # contradicting the Status pill on the same row.
-        # Now: paint pink only when Status itself is non-OK. Cols 1..13
-        # (Trend column dropped in R57).
-        if status != _STATUS_ON_TRACK:
+        # Round 60 — pink fill matches the in-app Watchlist filter.
+        # The in-app filters on per-line ``is_over and is_material``;
+        # ``sps_on_watchlist`` is the set of sub-programs whose row
+        # appears on that tab. Pre-R60 the fill used the per-sub-
+        # program Status pill instead, but Status only looks at the
+        # Expenditure side — Revenue-over-budget rows showed up in
+        # the in-app Watchlist but did NOT print pink, leaving the
+        # two views inconsistent.
+        # R58 history: the pre-R58 condition used ``available < 0``
+        # which had its own divergence problem (lumpy revenue
+        # arrival). R60 settles on the in-app signal as the single
+        # source of truth.
+        if sp in sps_on_watchlist:
             for col_idx in range(1, 14):
                 ws.cell(row=row_idx, column=col_idx).fill = _OVER_FILL
 

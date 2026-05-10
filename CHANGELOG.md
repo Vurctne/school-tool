@@ -5,6 +5,35 @@ is at the top.
 
 ---
 
+## v2.4.16.0 — May 2026
+
+* **Sub-Program Budget Report — XLSX Watchlist now matches in-app
+  Watchlist exactly.** Pre-fix the in-app Watchlist tab filtered on
+  per-line `is_over and is_material` (so a Revenue line over-budget
+  flagged the sub-program), but the exported XLSX used the
+  per-sub-program Status pill which only looks at the Expenditure
+  side. Sub-programs with Revenue over budget appeared on the in-app
+  Watchlist but were missing from the XLSX Watchlist sheet AND not
+  pink-highlighted on the main sheet. Now the writer aggregates the
+  same per-line signal the in-app uses, so the two views are
+  identical row-for-row. Tested against the sample PDF: 9 sub-
+  programs flagged in-app, 9 sub-programs flagged in XLSX, set
+  difference empty.
+* **Sub-Program Budget Report — parser fix for last-year-only rows.**
+  The Round-59 fix correctly handled "unbudgeted spend" rows
+  (single pre token + a negative Available Balance post token, e.g.
+  8650 Rowing Program "(See 8599)") but mis-classified the OTHER
+  single-pre shape: rows with NO post token at all. Per the KMAR
+  reference workbook, those rows have no current-year activity —
+  the single token is Last-year actual, and budget / YTD / orders /
+  available are all blank. Affected: 8505 School Saving Bonus
+  ($255,751 misread as YTD; correct is LY_actual=$255,751,
+  YTD=$0), 8655 Aerobics SLP ($1,644 same pattern), and 8505 on the
+  Revenue side ($166,286 same pattern). The unbudgeted-spend case
+  (1 pre + ≥1 post) still parses correctly.
+
+---
+
 ## v2.4.15.0 — May 2026
 
 * **Sub-Program Budget Report — parser fix for zero-spend rows.**
