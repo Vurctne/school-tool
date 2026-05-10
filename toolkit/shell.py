@@ -855,18 +855,24 @@ class TkShell(ttk.Frame):
         self._tool_metric_frames[tool.id] = metric_frame
 
         # --- Log view ---
-        # Round 22b/23 — log block is wrapped in a collapsible container,
-        # but Round 23 reverted the default to EXPANDED based on user
-        # feedback ("默认显示log").  The Hide log ▴ / Show log ▾ toggle
-        # remains so users who do want to collapse can.
+        # Round 22b/23 — log block is wrapped in a collapsible container.
+        # Round 23 set the default to EXPANDED based on early user
+        # feedback ("默认显示log"). Round 55 added the per-tool opt-in:
+        # tools that set ``log_default_collapsed = True`` (e.g. the
+        # Sub-Program Budget Report after its UI cleanup) start with
+        # the panel hidden. Tools without the attribute keep the
+        # Round 23 expanded default.
         log_frame = section(gap)
         log_inner = tk.Frame(log_frame, bg=tokens.BG_MUTED)
         log_body = tk.Frame(log_inner, bg=tokens.BG_MUTED)
         lv = LogView(log_body)
         lv.pack(fill="both", expand=True)
 
-        log_toggle_var = tk.BooleanVar(value=True)
-        log_toggle_btn = ttk.Button(log_inner, text="Hide log ▴")
+        log_collapsed_default = bool(getattr(tool, "log_default_collapsed", False))
+        log_initially_visible = not log_collapsed_default
+        log_toggle_var = tk.BooleanVar(value=log_initially_visible)
+        toggle_text = "Hide log ▴" if log_initially_visible else "Show log ▾"
+        log_toggle_btn = ttk.Button(log_inner, text=toggle_text)
 
         def _toggle_log(
             v: tk.BooleanVar = log_toggle_var,
@@ -884,8 +890,9 @@ class TkShell(ttk.Frame):
 
         log_toggle_btn.configure(command=_toggle_log)
         log_toggle_btn.pack(anchor="w")
-        # Pack log body initially — Round 23 default is expanded.
-        log_body.pack(fill="both", expand=True, pady=(tokens.SP_1, 0))
+        # Pack log body only when the tool's default is "expanded".
+        if log_initially_visible:
+            log_body.pack(fill="both", expand=True, pady=(tokens.SP_1, 0))
         log_inner.pack(fill="both", expand=True)
         log_frame.pack_forget()
 

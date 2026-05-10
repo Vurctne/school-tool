@@ -12,7 +12,6 @@ from toolkit.base_tool import (
     LogLine,
     NumberInput,
     ProgressFn,
-    RailItem,
     RangeInput,
     TableSpec,
     ToolResult,
@@ -206,31 +205,10 @@ def _watchlist_why(line: Any) -> str:
     return ""
 
 
-# Round 49 Phase B.3 — Summary tab columns.
-#
-# A plain-English read-down view designed for users with no finance
-# background. Two columns: a "what" label on the left, the value on
-# the right. Renders as a borderless table that reads like a card.
-# Sentence-style content, e.g.:
-#
-#   Period            April 2026
-#   Sub-programs      47 across 9 faculties
-#   Spent so far      32% of annual budget
-#   Spending pace     +4% (slightly ahead)
-#                     [blank row as visual breather]
-#   Need attention    5 sub-programs
-#   IT general        Over budget by $18,000
-#   Library books     Over budget by $8,400
-#   ...
-#
-# This is the new first tab so a school business officer who's never
-# run the tool lands on a one-screen summary instead of a four-tab
-# data dashboard. Power users click to Watchlist / Revenue / Expense
-# / Bridge for detail.
-_SUMMARY_COLUMNS: list[dict[str, Any]] = [
-    {"key": "label", "label": "", "width": 180, "mono": False},
-    {"key": "value", "label": "", "width": 320, "mono": False},
-]
+# Round 55 — Summary tab dropped (was the read-down "card" tab from
+# Round 49). Status pill (col 3) + Trend column (col 4) on the
+# Watchlist tab now carry the same call-to-attention signal at the
+# row level, without a separate summary card.
 
 
 # Round 22b — Combined view shows per-sub-program subsidy magnitude.
@@ -261,283 +239,12 @@ _COMBINED_COLUMNS: list[dict[str, Any]] = [
     },
 ]
 
-# Round 50 Phase C — Bridge waterfall columns.
-#
-# Replaces Combined as the "money story" view. Reads top-to-bottom from
-# Annual budget net through each faculty driver to YTD net, with a
-# text-art magnitude bar so the visual waterfall feel comes through
-# in a Tk Treeview without needing a Canvas-based widget.
-#
-# Bar palette is full-block (██) plus light shade (░░) only — those
-# two glyphs render in every monospace font including DejaVu Sans Mono
-# (CI fallback when Cascadia Mono isn't bundled). The eighth-block
-# characters (▏▎▍▌▋▊▉) read better but lose width parity on font
-# fallback; deferred per the Round 50 sparring partner's risk note.
-_BRIDGE_COLUMNS: list[dict[str, Any]] = [
-    {"key": "step", "label": "Step", "width": 200, "mono": False},
-    {"key": "amount", "label": "Amount", "width": 110, "align": "right", "mono": True},
-    {"key": "cumulative", "label": "Cumulative", "width": 110, "align": "right", "mono": True},
-    {"key": "magnitude", "label": "Magnitude", "width": 220, "mono": True},
-]
-
-# Round 50 — Bridge bar palette. Full block + light shade.
-_BRIDGE_FULL = "█"
-_BRIDGE_SHADE = "░"
-# Maximum bar width (in characters) — clamped so very narrow Magnitude
-# columns still render.
-_BRIDGE_BAR_WIDTH = 18
-# When more than this many faculties contribute, fold the smallest into
-# "Other faculties (n)" per the variance-analysis skill's "5–8 drivers
-# max" rule. The fold preserves reconciliation (Σ folded = single
-# Other amount).
-_BRIDGE_MAX_DRIVERS = 6
-
-
-def _build_bridge_rows(
-    lines: list[Any],
-) -> tuple[list[dict[str, Any]], Decimal, Decimal, Decimal]:
-    """Build Bridge waterfall rows from the per-line data.
-
-    Decomposes Annual budget net → YTD net by faculty contribution.
-    Each faculty's "driver amount" is its YTD net change vs the
-    annual-budget net for that faculty:
-
-        driver = (revenue_ytd - expense_ytd) - (revenue_budget - expense_budget)
-               = (rev_ytd - rev_budget) - (exp_ytd - exp_budget)
-
-    A positive driver means the faculty improved on plan (over-collected
-    or under-spent); negative means it weakened (under-collected or
-    over-spent).
-
-    Returns ``(rows, start_value, end_value, max_abs)``:
-    * ``rows`` — list of dicts ready for the Bridge ``TableSpec``.
-    * ``start_value`` — Annual budget net (Σ rev_b − Σ exp_b).
-    * ``end_value`` — YTD net (Σ rev_y − Σ exp_y).
-    * ``max_abs`` — for the bar-scale denominator, useful for tests.
-
-    Reconciliation: ``start_value + Σ driver_amounts == end_value`` —
-    holds even when "Other faculties" rolls up the smallest drivers.
-    """
-    # Aggregate per faculty (mirrors _build_combined_rows but keyed by
-    # faculty rather than sub_program).
-    rev_b: dict[str, Decimal] = {}
-    exp_b: dict[str, Decimal] = {}
-    rev_y: dict[str, Decimal] = {}
-    exp_y: dict[str, Decimal] = {}
-    for ln in lines:
-        fac = ln.faculty or "Unknown"
-        kind = ln.account.lower()
-        if kind.startswith("revenue"):
-            rev_b[fac] = rev_b.get(fac, Decimal("0")) + ln.budget
-            rev_y[fac] = rev_y.get(fac, Decimal("0")) + ln.ytd
-        elif kind.startswith("expenditure"):
-            exp_b[fac] = exp_b.get(fac, Decimal("0")) + ln.budget
-            exp_y[fac] = exp_y.get(fac, Decimal("0")) + ln.ytd
-
-    # Annual budget net + YTD net at the school level.
-    start_value = sum(rev_b.values(), Decimal("0")) - sum(exp_b.values(), Decimal("0"))
-    end_value = sum(rev_y.values(), Decimal("0")) - sum(exp_y.values(), Decimal("0"))
-
-    # Per-faculty driver amount (signed).
-    # Round 50 fix #2 — include faculties that appear only in YTD maps
-    # too. A new program that started spending mid-year has YTD but no
-    # budget; excluding it breaks the reconciliation invariant.
-    faculties = sorted(set(rev_b) | set(exp_b) | set(rev_y) | set(exp_y))
-    raw_drivers: list[tuple[str, Decimal]] = []
-    for fac in faculties:
-        rb = rev_b.get(fac, Decimal("0"))
-        ry = rev_y.get(fac, Decimal("0"))
-        eb = exp_b.get(fac, Decimal("0"))
-        ey = exp_y.get(fac, Decimal("0"))
-        driver = (ry - rb) - (ey - eb)
-        if driver != Decimal("0"):
-            raw_drivers.append((fac, driver))
-
-    # Sort by absolute magnitude descending so the biggest drivers render
-    # first; this is also what the variance-analysis skill recommends.
-    raw_drivers.sort(key=lambda t: -abs(t[1]))
-
-    # Fold smallest drivers into "Other faculties (n)" once we exceed
-    # the brief's 5-8 driver guideline. The threshold _BRIDGE_MAX_DRIVERS
-    # is intentionally inclusive — at exactly 6 drivers we still show all
-    # 6, but at 7+ we fold.
-    drivers: list[tuple[str, Decimal]]
-    if len(raw_drivers) > _BRIDGE_MAX_DRIVERS:
-        kept = raw_drivers[: _BRIDGE_MAX_DRIVERS - 1]
-        folded = raw_drivers[_BRIDGE_MAX_DRIVERS - 1 :]
-        other_amount = sum((amt for _, amt in folded), Decimal("0"))
-        kept.append((f"Other faculties ({len(folded)})", other_amount))
-        drivers = kept
-    else:
-        drivers = raw_drivers
-
-    # Bar scale: max absolute amount across start, drivers, and end.
-    max_abs = max(
-        [abs(start_value), abs(end_value)] + [abs(amt) for _, amt in drivers],
-        default=Decimal("0"),
-    )
-
-    def _bar(amount: Decimal) -> str:
-        """Text-art magnitude bar — full block + light shade track.
-
-        Length scales linearly with |amount| / max_abs * BAR_WIDTH.
-        The bar fills the leading portion with full-block characters
-        (`█`) and pads the tail with light shade (`░`) so the column
-        width is consistent across rows and the row's relative size
-        is visually obvious — Round 50 fix #1 wired the shade track.
-
-        Returns "" when there's no scale (zero data) or the amount
-        itself is zero.
-        """
-        if max_abs == Decimal("0") or amount == Decimal("0"):
-            return ""
-        scale = abs(amount) / max_abs
-        n = max(1, int(scale * Decimal(_BRIDGE_BAR_WIDTH)))
-        n = min(n, _BRIDGE_BAR_WIDTH)
-        return _BRIDGE_FULL * n + _BRIDGE_SHADE * (_BRIDGE_BAR_WIDTH - n)
-
-    rows: list[dict[str, Any]] = []
-
-    # Top: Annual budget net (full bar — represents the starting position).
-    rows.append(
-        {
-            "step": "Annual budget net",
-            "amount": "",  # no signed amount — this is the baseline
-            "cumulative": _fmt_signed_dollar(start_value),
-            "magnitude": _bar(start_value),
-            "_kind": "anchor",
-        }
-    )
-
-    # Drivers in order of descending |amount|, with running cumulative.
-    cumulative = start_value
-    for label, amt in drivers:
-        cumulative = cumulative + amt
-        rows.append(
-            {
-                "step": f"  {label}",
-                "amount": _fmt_signed_dollar(amt),
-                "cumulative": _fmt_signed_dollar(cumulative),
-                "magnitude": _bar(amt),
-                "_kind": "driver",
-                "_signed": int(amt > 0) - int(amt < 0),  # +1 / 0 / -1
-            }
-        )
-
-    # Bottom: YTD net (full bar — actual current position).
-    rows.append(
-        {
-            "step": "YTD net",
-            "amount": "",
-            "cumulative": _fmt_signed_dollar(end_value),
-            "magnitude": _bar(end_value),
-            "_kind": "anchor",
-        }
-    )
-
-    return rows, start_value, end_value, max_abs
-
-
-def _build_combined_rows(
-    lines: list[Any],
-) -> tuple[list[dict[str, Any]], Decimal, Decimal]:
-    """Aggregate Revenue + Expenditure YTD per sub-program for Combined view.
-
-    Round 24 — switched the headline from budget-based subsidy/surplus
-    to a YTD comparison.  Schools care about "is this sub-program in
-    the red right now?", not "is the annual budget in the red on
-    paper".  YTD captures actual performance to date.
-
-    For each sub-program:
-
-    * ``Revenue YTD`` and ``Expense YTD`` — actual amounts incurred
-      so far.
-    * ``Net YTD = Revenue YTD - Expense YTD``.  Positive = surplus
-      (over-collecting / under-spending); negative = subsidy (school
-      currently funding the gap).
-    * ``Annual budget net = Revenue budget - Expense budget`` — the
-      planned full-year position, for context.
-
-    Returns ``(rows, total_ytd_subsidy, total_ytd_surplus)``.  Sort:
-    largest YTD subsidy first (biggest current deficit), then
-    largest YTD surplus, then sub-program code.
-
-    Row tint via ``_subsidised`` (blue) / ``_surplus`` (green) flags
-    keyed off the YTD net direction.
-    """
-    rev_b: dict[str, Decimal] = {}
-    exp_b: dict[str, Decimal] = {}
-    rev_y: dict[str, Decimal] = {}
-    exp_y: dict[str, Decimal] = {}
-    desc: dict[str, str] = {}
-    faculty: dict[str, str] = {}
-
-    for ln in lines:
-        sp = ln.sub_program
-        if ln.account.lower().startswith("revenue"):
-            rev_b[sp] = rev_b.get(sp, Decimal("0")) + ln.budget
-            rev_y[sp] = rev_y.get(sp, Decimal("0")) + ln.ytd
-        elif ln.account.lower().startswith("expenditure"):
-            exp_b[sp] = exp_b.get(sp, Decimal("0")) + ln.budget
-            exp_y[sp] = exp_y.get(sp, Decimal("0")) + ln.ytd
-        if ln.description and sp not in desc:
-            desc[sp] = ln.description
-        if ln.faculty and sp not in faculty:
-            faculty[sp] = ln.faculty
-
-    sub_programs = sorted(set(rev_b.keys()) | set(exp_b.keys()))
-
-    # Per-row tuple: (sub_program, rev_ytd, exp_ytd, net_ytd, net_budget, description)
-    aggregated: list[tuple[str, Decimal, Decimal, Decimal, Decimal, str]] = []
-    total_ytd_subsidy = Decimal("0")  # sum of |net_ytd| where net_ytd < 0
-    total_ytd_surplus = Decimal("0")  # sum of net_ytd where net_ytd > 0
-    for sp in sub_programs:
-        ry = rev_y.get(sp, Decimal("0"))
-        ey = exp_y.get(sp, Decimal("0"))
-        rb = rev_b.get(sp, Decimal("0"))
-        eb = exp_b.get(sp, Decimal("0"))
-        net_ytd = ry - ey
-        net_budget = rb - eb
-        if net_ytd < 0:
-            total_ytd_subsidy += -net_ytd
-        elif net_ytd > 0:
-            total_ytd_surplus += net_ytd
-        aggregated.append((sp, ry, ey, net_ytd, net_budget, desc.get(sp, "")))
-
-    # Sort: biggest YTD subsidy first (most-negative net_ytd), then
-    # biggest YTD surplus (most-positive), then sub-program code.
-    aggregated.sort(key=lambda t: (t[3], -t[3], t[0]))
-
-    def _fmt_signed(value: Decimal) -> str:
-        """Dollar string with sign + direction marker.  ↑ = surplus,
-        ↓ = subsidy (school subsidising), em-dash = exactly zero."""
-        if value > 0:
-            return _fmt_dollar(value) + " ↑"
-        if value < 0:
-            return _fmt_dollar(-value) + " ↓"
-        return "—"
-
-    rows: list[dict[str, Any]] = []
-    for sp, ry, ey, net_ytd, net_budget, description in aggregated:
-        rows.append(
-            {
-                "sub_program": sp,
-                "description": description,
-                "revenue_ytd": _fmt_dollar(ry),
-                "expense_ytd": _fmt_dollar(ey),
-                "net_ytd": _fmt_signed(net_ytd),
-                "net_budget": _fmt_signed(net_budget),
-                "_faculty": faculty.get(sp, "Unknown"),
-                "_subsidised": net_ytd < 0,  # blue row tint
-                "_surplus": net_ytd > 0,  # green row tint
-                # Round 25 — raw decimals so the shell can recompute the
-                # Combined tab title totals after a faculty filter
-                # narrows the visible rows.
-                "_net_ytd_raw": net_ytd,
-                "_net_budget_raw": net_budget,
-            }
-        )
-    return rows, total_ytd_subsidy, total_ytd_surplus
+# Round 55 — Bridge waterfall (Round 50 Phase C) dropped per user
+# direction. The school-net waterfall view is no longer a primary
+# in-app concern; the OUTPUT XLSX's Sub Program Report sheet carries
+# the per-program signals (Status + Trend) which are sufficient at
+# the row level. School-level net comparisons can be reconstructed
+# from the Summary footer if needed in a future round.
 
 
 def _fmt_dollar(value: Decimal) -> str:
@@ -618,6 +325,13 @@ class SubProgramBudgetReportTool:
     # TEMPORARY: free-tier launch (Round 15). Restore to "sub_program" when paid
     # tier resumes — see docs/03_ROADMAP.md and handoff/round15_*.md.
     requires_feature = None
+
+    # Round 55 UI simplification — start with the log panel collapsed.
+    # The shell (toolkit.shell._build_tool_view) reads this attribute
+    # and initialises the Hide/Show log toggle in the collapsed state
+    # when True. Default behaviour (False) keeps the panel expanded as
+    # before for tools that don't opt in.
+    log_default_collapsed = True
 
     inputs: list[Any] = [
         FileInput(
@@ -1145,69 +859,12 @@ class SubProgramBudgetReportTool:
                     }
                 )
 
-        # ------------------------------------------------------------------
-        # Side rail — per-faculty contribution-to-variance summary
-        # ------------------------------------------------------------------
-        # Round 46 Phase B — replaced the old "used %" badge with each
-        # faculty's share of the school's total dollar variance:
-        #
-        #     contribution[fac] = Σ |variance_amount|_fac
-        #                       ÷ Σ |variance_amount|_all_faculties × 100
-        #
-        # Why the change: a faculty at 95% used and a faculty at 110% used
-        # look roughly the same in a "used %" rail, but if the first is a
-        # $200k program and the second is a $5k program, the first dwarfs
-        # the second in real-world impact. Contribution puts the biggest
-        # impacts at the top of the rail automatically (sort: contribution
-        # descending). The data-bar tint stays green / amber / red, just
-        # re-keyed to magnitude — high contribution = louder visual.
-        from decimal import Decimal as _Decimal
-
-        faculty_var_abs: dict[str, _Decimal] = {}
-        total_var_abs = _Decimal("0")
-        for ln in summary.lines:
-            fac = ln.faculty or "Unknown"
-            v = abs(ln.variance_amount)
-            faculty_var_abs[fac] = faculty_var_abs.get(fac, _Decimal("0")) + v
-            total_var_abs += v
-
-        # Compute per-faculty contribution %, default to 0 when total is 0
-        # (no variance anywhere — a school perfectly on budget; rare but
-        # mathematically possible).
-        contribution_pct: dict[str, _Decimal] = {}
-        for fac, var_abs in faculty_var_abs.items():
-            if total_var_abs > 0:
-                contribution_pct[fac] = (var_abs / total_var_abs) * _Decimal("100")
-            else:
-                contribution_pct[fac] = _Decimal("0")
-
-        # Sort: contribution desc, then "Unknown" last as a tiebreaker, then
-        # alphabetical. This puts the worst offenders at the top of the rail.
-        faculty_keys = sorted(
-            faculty_var_abs.keys(),
-            key=lambda k: (-float(contribution_pct[k]), k == "Unknown", k),
-        )
-
-        side_rail: list[RailItem] = []
-        for fac in faculty_keys:
-            pct = contribution_pct[fac]
-            # Round 47 — drop the stray space; matches every other %
-            # render in the file (_fmt_pct, _fmt_signed_pct, threshold_label).
-            value = f"{int(pct)}%"
-            over_budget_in_faculty = any(
-                ln.is_over and (ln.faculty or "Unknown") == fac for ln in summary.lines
-            )
-            side_rail.append(
-                RailItem(
-                    label=fac,
-                    value=value,
-                    filter_key=fac,  # opaque token; Agent I wires filter on this
-                    highlight=over_budget_in_faculty,
-                    # Round 46 — bar magnitude now reflects contribution,
-                    # not used %. Same SelectableList green/amber/red bands.
-                    value_pct=float(pct),
-                )
-            )
+        # Round 55 UI simplification: faculty rail dropped per user
+        # direction. The rail's "contribution to variance" signal is
+        # now subsumed by the Status pill + Trend column on each row,
+        # both of which surface the high-impact lines without needing
+        # a separate left rail. Saves 220px of horizontal space and
+        # one cognitive layer for the non-finance reader.
 
         # ------------------------------------------------------------------
         # TableSpec — new render path (row_style + on_row_click)
@@ -1299,26 +956,11 @@ class SubProgramBudgetReportTool:
             )
         ]
 
-        # Build Combined-view aggregated rows + totals.
-        combined_rows, total_subsidy, total_surplus = _build_combined_rows(summary.lines)
-
-        # Round 23 — Combined view colour semantics:
-        # * Subsidy (Exp > Rev) — school filling the gap → soft BLUE
-        #   from canonical INFO_BG token.
-        # * Surplus (Rev > Exp) — sub-program over-collecting → soft GREEN
-        #   from canonical HL_SOURCE_ONLY token (already used as "source-
-        #   only inserted row" green elsewhere in the toolkit).
-        # Both colours come from existing tokens so the drift guard
-        # ``test_no_rogue_hex_in_tool_strings`` stays happy.
-        subsidy_bg = tokens.INFO_BG
-        surplus_bg = "#" + tokens.HL_SOURCE_ONLY
-
-        def _combined_row_style(row: dict[str, Any]) -> dict[str, Any]:
-            if row.get("_subsidised"):
-                return {"background": subsidy_bg}
-            if row.get("_surplus"):
-                return {"background": surplus_bg}
-            return {}
+        # Round 55 — Combined view (Round 22b/23/24) and its
+        # _build_combined_rows / _combined_row_style helpers were
+        # consumed by the Bridge tab in Round 50, then both dropped in
+        # Round 55. The aggregated subsidy / surplus totals were only
+        # used as labels on the (now-deleted) Combined / Bridge tab.
 
         # ------------------------------------------------------------------
         # Round 46 Phase B — Watchlist tab
@@ -1385,161 +1027,15 @@ class SubProgramBudgetReportTool:
         n_expense = sum(1 for ln in summary.lines if ln.account.lower().startswith("expenditure"))
         revenue_label = f"Revenue ({n_revenue})"
         expense_label = f"Expense ({n_expense})"
-        # Round 24 — Combined tab title shows YTD totals (not budget).
-        # ``total_subsidy`` and ``total_surplus`` come from
-        # _build_combined_rows and are now keyed off net YTD direction.
-        combined_parts: list[str] = []
-        if total_subsidy > 0:
-            combined_parts.append(f"YTD subsidy ${total_subsidy:,.0f}")
-        if total_surplus > 0:
-            combined_parts.append(f"YTD surplus ${total_surplus:,.0f}")
-        # Round 50 Phase C — Combined replaced by Bridge below.
-        # combined_parts retained as a diagnostic; Bridge label below
-        # supersedes the old Combined label.
-        _ = combined_parts
-
-        # ------------------------------------------------------------------
-        # Round 50 Phase C — Bridge waterfall
-        # ------------------------------------------------------------------
-        # Replaces Combined as the "money story" tab. Renders top-down
-        # from Annual budget net → faculty drivers (each signed) → YTD
-        # net, with a text-art Magnitude column showing relative bar
-        # length per row.
-        bridge_rows, bridge_start, bridge_end, _bridge_max_abs = _build_bridge_rows(summary.lines)
-        # Round 50 fix #6 — round before branching so a sub-dollar
-        # change (e.g. Decimal("0.4")) renders as "on plan" rather
-        # than "+$0".
-        bridge_change = (bridge_end - bridge_start).quantize(Decimal("1"))
-        if bridge_change > 0:
-            bridge_label = f"Bridge · +${bridge_change:,.0f}"
-        elif bridge_change < 0:
-            bridge_label = f"Bridge · {_MINUS}${abs(bridge_change):,.0f}"
-        else:
-            bridge_label = "Bridge · on plan"
-
-        def _bridge_row_style(row: dict[str, Any]) -> dict[str, Any]:
-            """Bridge row tinting:
-            * anchor rows (Annual budget net / YTD net) — bold, subtle bg
-            * positive driver rows — green-tinted text
-            * negative driver rows — red-tinted text
-            """
-            kind = row.get("_kind")
-            if kind == "anchor":
-                return {
-                    "font": (tokens.FONT_SANS_PRIMARY, tokens.FS_13, "bold"),
-                    "background": tokens.INFO_BG,
-                }
-            if kind == "driver":
-                signed = row.get("_signed", 0)
-                if signed > 0:
-                    return {"foreground": tokens.OK_FG}
-                if signed < 0:
-                    return {"foreground": tokens.DANGER_FG}
-            return {}
-
-        # ------------------------------------------------------------------
-        # Round 49 Phase B.3 — Summary tab
-        # ------------------------------------------------------------------
-        # The new first tab. A plain-English read-down view a school
-        # business officer can scan in 10 seconds without finance
-        # background. Two-column TableSpec: "what" on the left, "value"
-        # on the right.
-        if summary.calendar_pct > 0:
-            macro_pacing_summary = float(ytd_pct) / summary.calendar_pct
-            diff_pct_summary = (macro_pacing_summary - 1.0) * 100
-            if abs(diff_pct_summary) < 0.5:
-                pace_phrase = "On track"
-            elif diff_pct_summary > 0:
-                if diff_pct_summary >= 10:
-                    pace_phrase = f"+{diff_pct_summary:.0f}% (well ahead)"
-                else:
-                    pace_phrase = f"+{diff_pct_summary:.0f}% (slightly ahead)"
-            else:
-                if abs(diff_pct_summary) >= 10:
-                    pace_phrase = f"{_MINUS}{abs(diff_pct_summary):.0f}% (well behind)"
-                else:
-                    pace_phrase = f"{_MINUS}{abs(diff_pct_summary):.0f}% (slightly behind)"
-        else:
-            pace_phrase = "Unknown (period not detected)"
-
-        summary_rows: list[dict[str, Any]] = [
-            {"label": "Period", "value": summary.period_label or "Unknown"},
-            {
-                "label": "Sub-programs",
-                "value": f"{n_lines} across {n_faculties} facult"
-                + ("y" if n_faculties == 1 else "ies"),
-            },
-            {"label": "Spent so far", "value": f"{ytd_pct}% of annual budget"},
-            {"label": "Spending pace", "value": pace_phrase},
-            # Blank breather row before the attention list.
-            {"label": "", "value": ""},
-        ]
-
-        if watchlist_lines:
-            count_phrase = (
-                "1 sub-program needs attention"
-                if len(watchlist_lines) == 1
-                else f"{len(watchlist_lines)} sub-programs need attention"
-            )
-            summary_rows.append(
-                {
-                    "label": "Need attention",
-                    "value": count_phrase,
-                    "_section_header": True,
-                }
-            )
-            # Top 5 by absolute variance — the rest are still on the
-            # Watchlist tab. Keep the summary card readable in one screen.
-            for ln in watchlist_lines[:5]:
-                desc = (ln.description or "").strip() or ln.sub_program
-                if ln.is_over and ln.is_material:
-                    over_by = ln.ytd - ln.budget
-                    detail = f"Over budget by ${over_by:,.0f}"
-                elif ln.is_over:
-                    detail = "Slightly over budget"
-                else:
-                    detail = "Spending too fast"
-                summary_rows.append({"label": f"  {desc}", "value": detail, "_attention_row": True})
-            if len(watchlist_lines) > 5:
-                summary_rows.append(
-                    {
-                        "label": f"  + {len(watchlist_lines) - 5} more",
-                        "value": "(see Watchlist tab)",
-                        "_attention_row": True,
-                    }
-                )
-        else:
-            summary_rows.append(
-                {
-                    "label": "Need attention",
-                    "value": "All clear — no sub-programs flagged",
-                    "_section_header": True,
-                }
-            )
-
-        summary_label = "Summary"
-
-        def _summary_row_style(row: dict[str, Any]) -> dict[str, Any]:
-            """Borderless card-like styling: bold section headers, indented
-            attention rows, plain rows for the headline facts."""
-            if row.get("_section_header"):
-                return {"font": (tokens.FONT_SANS_PRIMARY, tokens.FS_13, "bold")}
-            return {}
-
-        # Round 46 Phase B — Watchlist sits at index 1 so users still
-        # land on actionable content if they skip the Summary tab. The
-        # remaining tabs (Revenue / Expense / Combined) keep their
-        # familiar order from prior rounds.
+        # Round 55 UI simplification: Summary tab (Round 49) and Bridge
+        # tab (Round 50) dropped per user direction. Status pill (col 3)
+        # + Trend column (col 4) now carry the "what should I look at"
+        # signal at the row level — the Summary card is redundant.
+        # Bridge waterfall is similarly visualised at the school-net
+        # level via the OUTPUT XLSX's Sub Program Report sheet.
+        # Watchlist is now the default (index 0); Revenue / Expense
+        # remain as detail tabs.
         table_tabs: list[tuple[str, TableSpec]] = [
-            (
-                summary_label,
-                TableSpec(
-                    columns=_SUMMARY_COLUMNS,
-                    rows=summary_rows,
-                    row_style=_summary_row_style,
-                    on_row_click=None,
-                ),
-            ),
             (
                 watchlist_label,
                 TableSpec(
@@ -1565,15 +1061,6 @@ class SubProgramBudgetReportTool:
                     rows=expense_rows,
                     row_style=_row_style,
                     on_row_click=_on_row_click,
-                ),
-            ),
-            (
-                bridge_label,
-                TableSpec(
-                    columns=_BRIDGE_COLUMNS,
-                    rows=bridge_rows,
-                    row_style=_bridge_row_style,
-                    on_row_click=None,
                 ),
             ),
         ]
@@ -1654,7 +1141,9 @@ class SubProgramBudgetReportTool:
             log_lines=log_lines,
             table_columns=_TABLE_COLUMNS,  # legacy path — KEEP as transitional safety net
             table_rows=table_rows,  # legacy path — KEEP as transitional safety net
-            side_rail=side_rail,
+            # Round 55 — faculty rail dropped; pass None so the shell
+            # skips rendering the 220px left column entirely.
+            side_rail=None,
             table=table_spec,  # fallback for any path that hasn't learned tabs yet
             table_tabs=table_tabs,  # Round 22b — preferred render path
             output_path=summary.output_path,

@@ -5,6 +5,27 @@ is at the top.
 
 ---
 
+## v2.4.11.0 — May 2026
+
+* **Sub-Program Budget Report — UI simplification.** The in-app
+  view tabs go from 5 → 3: dropped the Summary tab (Round 49) and
+  Bridge tab (Round 50). Watchlist is now the default landing tab,
+  followed by Revenue and Expense detail tabs. The Status pill +
+  Trend column on each row carry the "what should I look at"
+  signal at the row level, replacing the Summary card.
+* **Faculty rail removed.** The 220px left rail showing per-faculty
+  contribution-to-variance is gone. The Status pill + Trend column
+  surface high-impact lines without needing a separate left
+  rail; saves screen real-estate and one cognitive layer for the
+  non-finance reader.
+* **Log panel default-collapsed.** The bottom log panel now starts
+  hidden — click "Show log ▾" to expand. Reduces the perceived
+  visual noise on first-run for users who don't need to debug.
+  Per-tool opt-in via the new ``BaseTool.log_default_collapsed``
+  attribute (defaults to False for other tools).
+
+---
+
 ## v2.4.10.0 — May 2026
 
 * **Sub-Program Budget Report — Trend column + Watchlist sheet.**

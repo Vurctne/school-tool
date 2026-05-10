@@ -1115,10 +1115,10 @@ class TestRound22bViewTabs:
             is_over=False,
         )
 
-    def test_result_has_five_tabs(self) -> None:
-        # Round 49 Phase B.3 — Summary added as the new first tab. The
-        # remaining four (Watchlist / Revenue / Expense / Combined)
-        # keep their order, just shifted right by one.
+    def test_result_has_three_tabs(self) -> None:
+        """Round 55 UI simplification — Summary tab (Round 49) and
+        Bridge tab (Round 50) dropped. Watchlist is now index 0
+        (default landing), Revenue index 1, Expense index 2."""
         tool = SubProgramBudgetReportTool()
         lines = [
             self._line("1251", "Revenue", "1000"),
@@ -1128,18 +1128,16 @@ class TestRound22bViewTabs:
         result = tool._build_result(summary, preview=False)
 
         assert result.table_tabs is not None
-        assert len(result.table_tabs) == 5
+        assert len(result.table_tabs) == 3
 
         labels = [label for label, _ in result.table_tabs]
-        assert any("Summary" in lbl for lbl in labels)
-        assert any("Watchlist" in lbl for lbl in labels)
-        assert any("Revenue" in lbl for lbl in labels)
-        assert any("Expense" in lbl for lbl in labels)
-        # Round 50 Phase C — Bridge replaced Combined as the 5th tab.
-        assert any("Bridge" in lbl for lbl in labels)
-        # Summary is first; Watchlist is second.
-        assert labels[0] == "Summary"
-        assert "Watchlist" in labels[1]
+        assert "Watchlist" in labels[0]  # default landing
+        assert "Revenue" in labels[1]
+        assert "Expense" in labels[2]
+        # Summary and Bridge no longer in any tab label.
+        for lbl in labels:
+            assert "Summary" not in lbl
+            assert "Bridge" not in lbl
 
     def test_revenue_tab_only_revenue_rows(self) -> None:
         tool = SubProgramBudgetReportTool()
@@ -1152,8 +1150,8 @@ class TestRound22bViewTabs:
         result = tool._build_result(summary, preview=False)
         assert result.table_tabs is not None
 
-        # Round 49 Phase B.3 — Summary at 0, Watchlist at 1, Revenue at 2.
-        rev_label, rev_spec = result.table_tabs[2]
+        # Round 55 — Watchlist at 0, Revenue at 1.
+        rev_label, rev_spec = result.table_tabs[1]
         assert "Revenue" in rev_label
         # All rows in the Revenue tab must be Revenue (no Expenditure leakage).
         for row in rev_spec.rows:
@@ -1174,97 +1172,37 @@ class TestRound22bViewTabs:
         result = tool._build_result(summary, preview=False)
         assert result.table_tabs is not None
 
-        # Round 49 Phase B.3 — Expense at index 3 after Summary + Watchlist.
-        exp_label, exp_spec = result.table_tabs[3]
+        # Round 55 — Expense now at index 2 (after Watchlist + Revenue).
+        exp_label, exp_spec = result.table_tabs[2]
         assert "Expense" in exp_label
         for row in exp_spec.rows:
             if row.get("_is_comment_row"):
                 continue
             assert row["account"] == "Expenditure"
 
-    def test_bridge_tab_has_anchor_and_driver_rows(self) -> None:
-        """Round 50 Phase C — Bridge replaces Combined.
-
-        Bridge structure: anchor row at top (Annual budget net),
-        per-faculty driver rows in the middle (sorted by abs amount),
-        anchor row at bottom (YTD net). Test fixture's ``_line``
-        builds YTD = budget / 2 so every faculty drives a negative
-        change (under-collected revenue or under-spent expense).
-        """
+    def test_watchlist_is_default_tab(self) -> None:
+        """Round 55: Watchlist is index 0 so users land on the
+        actionable view rather than the legacy Summary card."""
         tool = SubProgramBudgetReportTool()
-        lines = [
-            self._line("4400", "Revenue", "4400", description="Photography"),
-            self._line("4400", "Expenditure", "23613", description="Photography"),
-            self._line("1320", "Revenue", "14000", description="Textiles"),
-        ]
+        lines = [self._line("4001", "Expenditure", "5000")]
         summary = _make_summary(lines=lines)
         result = tool._build_result(summary, preview=False)
         assert result.table_tabs is not None
+        first_label, _ = result.table_tabs[0]
+        assert "Watchlist" in first_label
 
-        bridge_label, bridge_spec = result.table_tabs[4]
-        assert "Bridge" in bridge_label
-        rows = bridge_spec.rows
-        # Top anchor + at least 1 driver + bottom anchor.
-        assert len(rows) >= 3
-        assert rows[0]["_kind"] == "anchor"
-        assert rows[0]["step"] == "Annual budget net"
-        assert rows[-1]["_kind"] == "anchor"
-        assert rows[-1]["step"] == "YTD net"
-        # Middle rows are drivers.
-        for row in rows[1:-1]:
-            assert row["_kind"] == "driver"
-            assert "_signed" in row
-
-    def test_bridge_reconciles(self) -> None:
-        """Round 50 Phase C — start + Σ drivers = end (the variance-
-        analysis skill's verification rule). Holds even when "Other
-        faculties" rolls up the smallest drivers."""
-        from tools.sub_program.frame import _build_bridge_rows
-
-        lines = [
-            self._line("4400", "Revenue", "4400"),
-            self._line("4400", "Expenditure", "23613"),
-            self._line("1320", "Revenue", "14000"),
-        ]
-        summary = _make_summary(lines=lines)
-        rows, start_value, end_value, _ = _build_bridge_rows(summary.lines)
-        # Sum the driver amounts (the rows between the two anchors).
-        driver_amounts = [
-            ln_row.get("_signed", 0) for ln_row in rows if ln_row["_kind"] == "driver"
-        ]
-        assert len(driver_amounts) >= 1
-        # Reconciliation: pull the actual amounts, sum, compare.
-        # The driver row's "amount" is a formatted string ("+$X,XXX" or
-        # "−$X,XXX"); we test against the underlying logic by recomputing.
-        assert isinstance(start_value, Decimal)
-        assert isinstance(end_value, Decimal)
-
-    def test_bridge_label_carries_change_amount(self) -> None:
-        """Bridge tab label embeds the headline change so users know at a
-        glance whether the bottom-line moved up, down, or held."""
+    def test_no_side_rail(self) -> None:
+        """Round 55: faculty rail dropped — side_rail is None."""
         tool = SubProgramBudgetReportTool()
-        # Revenue $10k > Expense $5k → improvement at fixture YTD = budget/2.
-        lines = [
-            self._line("4001", "Revenue", "10000"),
-            self._line("4001", "Expenditure", "5000"),
-        ]
+        lines = [self._line("4001", "Expenditure", "5000")]
         summary = _make_summary(lines=lines)
         result = tool._build_result(summary, preview=False)
-        assert result.table_tabs is not None
-        bridge_label, _ = result.table_tabs[4]
-        # Label is one of "Bridge · +$X" / "Bridge · −$X" / "Bridge · on plan".
-        assert bridge_label.startswith("Bridge")
+        assert result.side_rail is None
 
-    def test_bridge_columns_are_step_amount_cumulative_magnitude(self) -> None:
-        """Round 50 Phase C — Bridge column schema."""
-        tool = SubProgramBudgetReportTool()
-        summary = _make_summary()
-        result = tool._build_result(summary, preview=False)
-        tabs = result.table_tabs
-        assert tabs is not None
-        bridge_spec = tabs[4][1]
-        bridge_keys = [c["key"] for c in bridge_spec.columns]
-        assert bridge_keys == ["step", "amount", "cumulative", "magnitude"]
+    def test_log_default_collapsed_attribute(self) -> None:
+        """Round 55: tool opts in to the shell's collapsed-log default
+        via ``log_default_collapsed = True`` class attribute."""
+        assert SubProgramBudgetReportTool.log_default_collapsed is True
 
 
 # ---------------------------------------------------------------------------
