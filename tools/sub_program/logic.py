@@ -221,15 +221,28 @@ _STATUS_SLIGHTLY_OVER = "Slightly over"
 _STATUS_MATERIAL = "Significant overspend"
 _STATUS_URGENT = "Investigate urgently"
 _STATUS_SPENT_WITHOUT_BUDGET = "Spent without budget"
+# Round 62 — Revenue side surfaced in Status. Pre-R62 the pill only
+# inspected the Expenditure side, so sub-programs whose Revenue YTD
+# materially exceeded Revenue budget (parent payments collected
+# ahead of schedule, fundraisers that beat target) printed pink-
+# filled on the Watchlist (per-line is_over+is_material aggregation)
+# but with Status="On track" — a council-facing contradiction.
+# "Revenue over budget" sits at the bottom of the urgency stack: it
+# IS noteworthy (council needs to acknowledge over-collection or
+# plan refunds / roll-forward) but never escalates ahead of
+# Expense-side overruns. The Expense-side buckets always win when
+# both fire on the same row.
+_STATUS_REVENUE_OVER = "Revenue over budget"
 
 # Round 56 — "No spend yet" pill dropped along with all calendar-
-# pacing judgements. Status now reflects only over-budget concerns.
+# pacing judgements. Round 62 — added "Revenue over budget".
 _STATUS_VALUES: tuple[str, ...] = (
     _STATUS_ON_TRACK,
     _STATUS_SLIGHTLY_OVER,
     _STATUS_MATERIAL,
     _STATUS_URGENT,
     _STATUS_SPENT_WITHOUT_BUDGET,
+    _STATUS_REVENUE_OVER,
 )
 
 # Bucket boundaries for overrun magnitude. Both dollar AND percent
@@ -248,6 +261,7 @@ def compute_status_pill(
     annual_rev_budget: Decimal = Decimal("0"),
     rev_ytd: Decimal = Decimal("0"),
     expense_threshold: float = 101.0,
+    revenue_threshold: float = 101.0,
     materiality_dollar: int = 100,
 ) -> str:
     """Return a plain-English Status pill for one sub-program.
@@ -268,6 +282,16 @@ def compute_status_pill(
         * ``Significant overspend`` — $25K–$100K OR 25–50% past threshold.
         * ``Slightly over`` — anything else past materiality.
 
+    Round 62 — Revenue side checked when Expense passes the threshold.
+
+    * ``Revenue over budget`` — when expense isn't over-budget but
+      revenue YTD materially exceeds the revenue threshold (default
+      101% of annual revenue budget). Sits at the bottom of the
+      urgency stack — over-collection is generally benign but council
+      needs to acknowledge it (refund parents, roll forward, or
+      adjust the budget). Expense-side buckets always win when both
+      fire on the same row.
+
     Round 56 dropped from the prior contract:
 
     * ``available`` parameter (and the surplus / over-drawn signal
@@ -282,19 +306,45 @@ def compute_status_pill(
     if annual_exp_budget == 0 and annual_rev_budget == 0 and rev_ytd == 0 and exp_ytd > 0:
         return _STATUS_SPENT_WITHOUT_BUDGET
 
-    # No expense budget allocated and no spend → on track (chart-of-
-    # accounts placeholder, no decision to make).
+    # Helper closure: does the Revenue side qualify for the
+    # "Revenue over budget" pill? Defined once and reused at every
+    # "else → On track" branch so we don't accidentally skip the
+    # check on some code paths.
+    def _revenue_over() -> bool:
+        rev_th = Decimal(str(revenue_threshold))
+        # Unbudgeted revenue collected (e.g. surprise donation under
+        # a sub-program with no rev budget but the school received
+        # money) → flag if material.
+        if annual_rev_budget == 0:
+            return bool(rev_ytd != 0 and abs(rev_ytd) >= mat)
+        # Budgeted revenue exceeds the threshold AND the dollar
+        # overshoot meets the materiality floor.
+        used = rev_ytd / annual_rev_budget * Decimal("100")
+        if used <= rev_th:
+            return False
+        threshold_dollars = annual_rev_budget * rev_th / Decimal("100")
+        overrun = rev_ytd - threshold_dollars
+        return bool(abs(overrun) >= mat)
+
+    # No expense budget allocated and no spend on expense side. Check
+    # the revenue side before concluding "On track" — a fundraising
+    # sub-program with $0 expense budget but rev YTD > rev budget
+    # IS council-relevant.
     if annual_exp_budget == 0:
+        if _revenue_over():
+            return _STATUS_REVENUE_OVER
         return _STATUS_ON_TRACK
 
     threshold = Decimal(str(expense_threshold))
     used_pct = exp_ytd / annual_exp_budget * Decimal("100")
     if used_pct <= threshold:
+        if _revenue_over():
+            return _STATUS_REVENUE_OVER
         return _STATUS_ON_TRACK
 
-    # Over budget. Compute overrun in dollar AND in percent past the
-    # threshold so the materiality floor + bucketing logic can apply
-    # the variance-analysis skill's "either exceeded" rule.
+    # Over budget on expense. Compute overrun in dollar AND in percent
+    # past the threshold so the materiality floor + bucketing logic can
+    # apply the variance-analysis skill's "either exceeded" rule.
     threshold_dollars = annual_exp_budget * threshold / Decimal("100")
     overrun = exp_ytd - threshold_dollars  # positive
     pct_over = used_pct - threshold  # how many pp past threshold
@@ -302,13 +352,18 @@ def compute_status_pill(
     # Hard $500 noise floor — chart-of-accounts placeholder rows
     # below this magnitude are not council-grade attention.
     if overrun < Decimal("500"):
+        if _revenue_over():
+            return _STATUS_REVENUE_OVER
         return _STATUS_ON_TRACK
 
     # Materiality floor — overrun below BOTH dollar and percent
-    # floors collapses back to On track.
+    # floors collapses back to On track (or Revenue-over if applicable).
     if overrun < mat and pct_over <= Decimal("50"):
+        if _revenue_over():
+            return _STATUS_REVENUE_OVER
         return _STATUS_ON_TRACK
 
+    # Expense-side urgency tiers — these always win over Revenue.
     if overrun > _STATUS_URGENT_DOLLAR or pct_over > _STATUS_URGENT_PCT:
         return _STATUS_URGENT
     if overrun > _STATUS_MATERIAL_DOLLAR or pct_over > _STATUS_MATERIAL_PCT:
@@ -1326,10 +1381,14 @@ def _parse_sub_program_pdf_internal(
                 text = page.extract_text() or ""
                 # Section banner is a row that says "Revenue Recurrent
                 # and Capital" or "Expenditure Recurrent and Capital".
-                if _REVENUE_HDR.search(text):
-                    section = "Revenue"
+                # The CASES21 PDF never shows both banners on the same
+                # page; use elif so a mid-page match for one section
+                # banner can't accidentally co-fire the other (defensive
+                # against future format changes).
                 if _EXPENDITURE_HDR.search(text):
                     section = "Expenditure"
+                elif _REVENUE_HDR.search(text):
+                    section = "Revenue"
 
                 # Extract period label from footer (first match wins).
                 if not period_label:
@@ -1830,6 +1889,8 @@ def _write_xlsx(
     materiality_dollar: int = 100,
     prior_ytd: dict[str, Decimal] | None = None,
     prior_funds: dict[str, Decimal] | None = None,
+    revenue_threshold: float | None = None,
+    expense_threshold: float | None = None,
 ) -> None:
     """Write the report to an XLSX with the Monthly Sub Program Report shape.
 
@@ -1854,11 +1915,23 @@ def _write_xlsx(
     the prior-period XLSX so the carry-forward field rolls forward
     automatically.
 
-    The ``include_combined`` and ``over_budget_threshold`` arguments
-    are accepted for backward compatibility with existing call sites
-    but no longer affect the output.
+    Round 62 added ``revenue_threshold`` / ``expense_threshold``. The
+    Status pill now flags Revenue-over-budget rows (was Expense-only
+    pre-R62), so the writer needs the per-section thresholds to
+    compute pills consistently with the in-app view. Both default to
+    ``over_budget_threshold`` for backward compatibility — existing
+    callers that pass only the combined threshold keep working.
+
+    The ``include_combined`` argument is accepted for backward
+    compatibility with existing call sites but no longer affects the
+    output.
     """
-    del include_combined, over_budget_threshold, prior_ytd  # no-op for the new shape
+    if revenue_threshold is None:
+        revenue_threshold = over_budget_threshold
+    if expense_threshold is None:
+        expense_threshold = over_budget_threshold
+    del include_combined, prior_ytd  # no-op for the new shape
+    del over_budget_threshold  # superseded by per-section thresholds above
 
     from openpyxl import Workbook
 
@@ -1869,13 +1942,26 @@ def _write_xlsx(
 
     ws = wb.create_sheet("Sub Program Report")
     _write_monthly_sub_program_sheet(
-        ws, lines, period_label, materiality_dollar, prior_funds=prior_funds
+        ws,
+        lines,
+        period_label,
+        materiality_dollar,
+        prior_funds=prior_funds,
+        revenue_threshold=revenue_threshold,
+        expense_threshold=expense_threshold,
+        # pass-through is handled by the function signature
     )
 
     # F2: Watchlist sheet — filtered subset for council.
     watchlist_ws = wb.create_sheet("Watchlist")
     _write_watchlist_sheet(
-        watchlist_ws, lines, period_label, materiality_dollar, prior_funds=prior_funds
+        watchlist_ws,
+        lines,
+        period_label,
+        materiality_dollar,
+        prior_funds=prior_funds,
+        revenue_threshold=revenue_threshold,
+        expense_threshold=expense_threshold,
     )
 
     # R1 fix: pin the main sheet as active so Excel opens to it by
@@ -1897,6 +1983,8 @@ def _write_monthly_sub_program_sheet(
     filter_to_non_ok: bool = False,
     sort_by_variance_desc: bool = False,
     sheet_title_override: str | None = None,
+    revenue_threshold: float = 101.0,
+    expense_threshold: float = 101.0,
 ) -> None:
     """Round 57 — Monthly Sub Program Report shape (13-col).
 
@@ -2028,6 +2116,8 @@ def _write_monthly_sub_program_sheet(
                 exp_ytd=ey,
                 annual_rev_budget=rb,
                 rev_ytd=ry,
+                revenue_threshold=revenue_threshold,
+                expense_threshold=expense_threshold,
                 materiality_dollar=materiality_dollar,
             )
             annotated.append((sp, avail, status))
@@ -2221,11 +2311,14 @@ def _write_monthly_sub_program_sheet(
         # Round 53 F1 (Move B) — Status pill at col 3. Round 56:
         # pacing-free contract; compute_status_pill gates on
         # ``exp_ytd > expense_threshold% × annual_exp_budget``.
+        # Round 62 — Revenue-side check added.
         status = compute_status_pill(
             annual_exp_budget=eb,
             exp_ytd=ey,
             annual_rev_budget=rb,
             rev_ytd=ry,
+            revenue_threshold=revenue_threshold,
+            expense_threshold=expense_threshold,
             materiality_dollar=materiality_dollar,
         )
         status_cell = ws.cell(row=row_idx, column=3, value=status)
@@ -2253,16 +2346,16 @@ def _write_monthly_sub_program_sheet(
             outlook=c_outlook,
             action=c_action,
         )
-        if not prose and status in (
-            _STATUS_URGENT,
-            _STATUS_MATERIAL,
-            _STATUS_SPENT_WITHOUT_BUDGET,
-        ):
+        if not prose and sp in sps_on_watchlist:
             # R2 fix: imperative cue for attention statuses so the
             # cell doesn't print as a contradiction (urgent status
             # with blank Comments looks like the BM ignored the
             # alert). Round 56 dropped the No-spend-yet special-case
-            # (the pill itself was removed).
+            # (the pill itself was removed). Round 62 — gate the
+            # auto-fill on Watchlist membership (the same signal that
+            # drives the pink fill) rather than the Status pill
+            # buckets. Any row with pink fill now also gets the
+            # prompt — no pink-with-blank-comments contradictions.
             prose = "Action needed: add commentary."
         # Defensive Excel-formula-injection guard. A user typing
         # ``=SUM(...)`` etc. into Notes would otherwise get
@@ -2376,6 +2469,8 @@ def _write_watchlist_sheet(
     materiality_dollar: int = 100,
     *,
     prior_funds: dict[str, Decimal] | None = None,
+    revenue_threshold: float = 101.0,
+    expense_threshold: float = 101.0,
 ) -> None:
     """F2: write the Watchlist sheet — a filtered subset of the main
     sheet showing only sub-programs whose Status is not "On track",
@@ -2396,6 +2491,8 @@ def _write_watchlist_sheet(
         filter_to_non_ok=True,
         sort_by_variance_desc=True,
         sheet_title_override="Watchlist — sub-programs needing attention",
+        revenue_threshold=revenue_threshold,
+        expense_threshold=expense_threshold,
     )
 
 
@@ -2617,6 +2714,11 @@ def generate_report(
             over_budget_threshold=over_budget_threshold,
             materiality_dollar=materiality_dollar,
             prior_funds=prior_funds,
+            # Round 62 — thread the per-section thresholds through so
+            # compute_status_pill's Revenue-side check uses the same
+            # value the in-app slider produced.
+            revenue_threshold=rev_th,
+            expense_threshold=exp_th,
         )
     else:
         progress(70, "Preparing preview...")

@@ -32,6 +32,13 @@ def _make_line(
 ) -> SubProgramLine:
     b = Decimal(budget)
     y = Decimal(ytd)
+    # Round 62 — derive is_material so synthetic test lines that opt
+    # into is_over (a "fail this row" probe) also satisfy the
+    # is_over+is_material Watchlist filter without each caller having
+    # to set it manually. Tests that need a specifically immaterial
+    # is_over row should set fields on the returned dataclass via
+    # dataclasses.replace.
+    is_material = abs(b - y) >= Decimal("100")
     return SubProgramLine(
         sub_program=sub_program,
         account=account,
@@ -42,6 +49,7 @@ def _make_line(
         used_pct=Decimal("50.0"),
         faculty=faculty,
         is_over=is_over,
+        is_material=is_material,
     )
 
 
@@ -462,9 +470,13 @@ class TestHelpText:
     def test_help_text_mentions_cases21(self) -> None:
         assert "CASES21" in SubProgramBudgetReportTool.help_text
 
-    def test_help_text_mentions_faculty(self) -> None:
+    def test_help_text_mentions_watchlist(self) -> None:
+        # Round 62 — help text rewritten. Faculty rail was dropped in
+        # Round 55; the new copy describes the Watchlist tab + Status
+        # pill instead.
         ht = SubProgramBudgetReportTool.help_text.lower()
-        assert "faculty" in ht
+        assert "watchlist" in ht
+        assert "status pill" in ht
 
 
 # ---------------------------------------------------------------------------
@@ -1055,7 +1067,10 @@ class TestRound22aInlineCommentary:
 
     def test_banner_names_the_single_over_line(self) -> None:
         """Round 22a — the banner now reads '4400 Photography (Revenue)
-        — over by $X' rather than the cryptic '4400/Revenue' form."""
+        — over by $X' rather than the cryptic '4400/Revenue' form.
+        Round 62 — banner counts is_over+is_material; set the flag
+        explicitly here since this synthetic line bypasses the
+        recompute path."""
         tool = SubProgramBudgetReportTool()
         line = SubProgramLine(
             sub_program="4400",
@@ -1067,6 +1082,7 @@ class TestRound22aInlineCommentary:
             used_pct=Decimal("536.66"),
             faculty="Curriculum",
             is_over=True,
+            is_material=True,
         )
         summary = _make_summary(lines=[line], over_budget_lines=[line])
         result = tool._build_result(summary, preview=False)

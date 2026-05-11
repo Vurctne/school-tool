@@ -1600,7 +1600,9 @@ class TestStatusPill:
 
     def test_status_values_tuple_has_designed_shape(self) -> None:
         """Pin the status values so a stray edit can't silently drift.
-        Round 56 dropped 'No spend yet' along with calendar_pct."""
+        Round 56 dropped 'No spend yet' along with calendar_pct.
+        Round 62 added 'Revenue over budget' so the Status pill agrees
+        with the Watchlist filter on revenue-side overruns."""
         from tools.sub_program.logic import _STATUS_VALUES
 
         assert _STATUS_VALUES == (
@@ -1609,6 +1611,7 @@ class TestStatusPill:
             "Significant overspend",
             "Investigate urgently",
             "Spent without budget",
+            "Revenue over budget",
         )
 
     def test_on_track_when_under_budget(self) -> None:
@@ -2569,19 +2572,37 @@ class TestF1Round2Fixes:
             != "Spent without budget"
         )
 
-    def test_donation_program_under_threshold_is_on_track(self) -> None:
-        """Round 56: a program with rev_b = 0 but rev_y > 0 (donations /
-        unbudgeted grants) and exp_ytd within the threshold of the
-        annual exp budget reads as On track. The revenue side is
-        irrelevant to the threshold gate."""
+    def test_donation_program_with_unbudgeted_revenue_flags(self) -> None:
+        """Round 62: a program with rev_b = 0 but rev_y > 0 (donations
+        / unbudgeted grants) now reads as 'Revenue over budget' when
+        the rev_y is material — council needs to acknowledge the
+        unplanned income (refund / roll-forward / re-allocate).
+        Pre-R62 the Status pill ignored the Revenue side, so the same
+        row read as 'On track' which contradicted the Watchlist
+        flagging it via the per-line is_over check."""
         from tools.sub_program.logic import compute_status_pill
 
-        # Donation $5K received, $3.5K spent of $10K exp budget = 35%.
-        # Within 101% threshold → On track.
+        # Donation $5K received (rev_b=0, rev_y=$5K), $3.5K spent of
+        # $10K exp budget = 35% (under 101% threshold). The expense
+        # side is happy but the revenue side IS material.
         result = compute_status_pill(
             annual_exp_budget=Decimal("10000"),
             annual_rev_budget=Decimal("0"),
             rev_ytd=Decimal("5000"),
+            exp_ytd=Decimal("3500"),
+        )
+        assert result == "Revenue over budget"
+
+    def test_donation_program_below_materiality_is_on_track(self) -> None:
+        """Round 62 boundary: same shape as the test above but rev_y
+        below the materiality floor → On track (the $100 default mat
+        treats sub-$100 donations as chart-of-accounts noise)."""
+        from tools.sub_program.logic import compute_status_pill
+
+        result = compute_status_pill(
+            annual_exp_budget=Decimal("10000"),
+            annual_rev_budget=Decimal("0"),
+            rev_ytd=Decimal("50"),  # below $100 mat
             exp_ytd=Decimal("3500"),
         )
         assert result == "On track"

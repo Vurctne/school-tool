@@ -5,6 +5,53 @@ is at the top.
 
 ---
 
+## v2.4.18.0 — May 2026
+
+* **Sub-Program Budget Report — Status pill now flags Revenue-over-
+  budget rows.** Pre-fix the Status pill only inspected the
+  Expenditure side, so sub-programs whose Revenue YTD materially
+  exceeded the Revenue budget (parent payments collected ahead of
+  schedule, fundraisers that beat target, unbudgeted donations)
+  printed pink-shaded on the Watchlist sheet but with Status = "On
+  track" — a council-facing contradiction. 4 of the 6 Watchlist
+  rows in the sample PDF exhibited this. The new "Revenue over
+  budget" pill sits at the bottom of the urgency stack — over-
+  collection is generally benign, but council needs to acknowledge
+  it (refund parents, roll forward, adjust the budget). Expense-side
+  buckets (Slightly over / Significant overspend / Investigate
+  urgently) always win when both fire on the same row.
+* **Sub-Program Budget Report — "Ignore amounts under" slider now
+  propagates to the Excel export.** Pre-fix the `_export_xlsx` call
+  dropped the user's materiality_dollar value and the writer fell
+  back to its $100 default. Users who tuned the slider up (e.g. to
+  $5,000 to suppress mid-range overruns) saw the in-app Watchlist
+  narrow correctly but the exported XLSX kept flagging every $100+
+  variance.
+* **Sub-Program Budget Report — banner count reconciled with
+  Watchlist count.** Pre-fix the banner read "7 lines over budget"
+  while the Watchlist tab label read "Watchlist (6)" because the
+  banner included immaterial is_over lines (below the $ floor) and
+  the Watchlist filtered them out. Both now use the same filter.
+* **Sub-Program Budget Report — auto-filled comment now matches
+  pink-fill exactly.** Pre-fix the "Action needed: add commentary."
+  prompt only fired on Status ∈ (Urgent / Material / Spent without
+  budget). After Round 60 wired pink-fill to the per-line
+  is_over+is_material signal, rows could be pink without any of
+  those three statuses (notably revenue-over rows) and so printed
+  with blank Comments — looking like the business manager had
+  ignored the alert. Now any pink row gets the prompt.
+* **Sub-Program Budget Report — help text rewritten.** Removed
+  stale references to the dropped Faculty rail (Round 55) and to a
+  single Over-budget threshold field (split into Revenue + Expense
+  thresholds in Round 21).
+* **Various code cleanups** from two parallel Opus 4.7 audits:
+  inverted `_OVER_BG` comment fixed; section-banner detection uses
+  `elif` so a future page with both banner texts can't accidentally
+  co-fire; pre-R57 stale references to "Trend column" left in
+  comments tagged for follow-up cleanup.
+
+---
+
 ## v2.4.17.0 — May 2026
 
 * **Sub-Program Budget Report — parser rewritten to use positional

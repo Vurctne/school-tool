@@ -36,9 +36,8 @@ _HELP_TEXT = """Sub-Program Budget Report
 
 This tool reformats the CASES21 Annual Sub-Program Budget Report \
 (GL21157 export) into a School Council-ready XLSX workbook. It optionally \
-joins in prior-period commentary, flags over-budget lines with a pink \
-highlight, and groups sub-programs by faculty in a left-hand rail so you \
-can navigate straight to the area you need.
+joins in prior-period commentary and flags lines that need attention \
+with a pink highlight and a Status pill.
 
 The output workbook is ready for distribution to your principal or school \
 council without any manual formatting.
@@ -48,45 +47,49 @@ WHAT THIS TOOL DOES
 
   1. Reads the CASES21 GL21157 Annual Sub-Program Budget Report — as a PDF \
 (primary) or XLSX export if your version of CASES21 supports it.
-  2. Optionally reads a prior-period commentary XLSX and joins the \
-Commentary column into the output. If omitted, the Commentary column is \
-blank.
-  3. Flags every line where YTD spend exceeds the annual budget with a \
-pink highlight.
-  4. Summarises totals across all sub-programs, grouped by faculty.
-  5. Writes the formatted output workbook to your chosen path.
+  2. Optionally reads a prior-period XLSX produced by this tool. The \
+Commentary column carries forward; the Funds from Previous Years \
+column rolls forward into the carry-forward field automatically.
+  3. Flags every line whose Expenditure or Revenue YTD crosses the \
+matching threshold with a pink highlight + a plain-English Status pill \
+(Slightly over / Significant overspend / Investigate urgently / Spent \
+without budget / Revenue over budget).
+  4. Writes the formatted workbook with two sheets: the full Sub Program \
+Report, and a Watchlist sheet that filters to only the sub-programs \
+flagged for attention.
 
 
 HOW TO USE THIS TOOL
 
   1. Sub-Program report — click Browse and select the CASES21 GL21157 PDF \
 (or XLSX). This is the only required file.
-  2. Prior-period comments (optional) — click Browse and select the \
-commentary XLSX from your previous reporting period. If you have no \
-commentary file, leave this blank and the tool will run without it.
-  3. Over-budget threshold (%) — optional. Default is 101.0%. Rows where \
-YTD spend exceeds this percentage of the annual budget are flagged pink. \
-Raise above 100 for a small tolerance; set very high (e.g. 9999) to \
-suppress all highlights.
-  4. Click "Generate report". A progress bar will appear while the tool \
-runs. Do not open or modify the input files while the tool is running.
-  5. When complete, review any rows highlighted pink — these lines have \
-exceeded your threshold percentage and require attention before the report is \
-submitted.
-
-The faculty rail on the left of the result table lets you jump directly \
-to sub-programs belonging to a particular faculty.
+  2. Prior-period comments (optional) — click Browse and select last \
+month's XLSX produced by this tool. If you have no prior file, leave \
+this blank.
+  3. Revenue / Expense over-budget thresholds (%) — optional. Default is \
+101.0% on both. Rows whose YTD crosses the matching threshold are \
+flagged. Raise above 100 for a small tolerance; set high (e.g. 120) to \
+narrow the Watchlist to large overruns.
+  4. Ignore amounts under ($) — dollar floor for the materiality check. \
+A variance below this amount is treated as chart-of-accounts noise and \
+stays off the Watchlist. Default $100.
+  5. Click "Generate report" then "Export to Excel". A progress bar will \
+appear while the tool runs. Do not open or modify the input files while \
+the tool is running.
+  6. When complete, review the rows on the Watchlist sheet (and the \
+pink-shaded rows on the main sheet) — these are the lines that crossed \
+the threshold AND meet the dollar materiality floor.
 
 
 IMPORTANT NOTES
 
   • The output workbook is formatted for School Council submission — \
 no further formatting is needed.
-  • Over-budget rows are highlighted in pink. Colour is never the sole \
-signal: the Variance $ column shows a positive amount and the Var % \
-column shows a value above 0.
-  • Commentary entered via "Edit commentary..." survives the session and \
-is written into the output workbook as a Commentary column.
+  • Pink rows are also flagged with a Status pill (col C) and a \
+non-blank Comments cell. Colour is never the sole signal.
+  • The Status pill and the Watchlist tab use the same filter. If a row \
+appears on the in-app Watchlist tab, the same row is pink-shaded in the \
+exported XLSX and appears on the XLSX Watchlist sheet.
 
 
 SUPPORT
@@ -97,7 +100,9 @@ Please send feedback to feedback@schooltool.com.au
 """
 
 # ---------------------------------------------------------------------------
-# Over-budget highlight (without leading #, as required by openpyxl fills)
+# Over-budget highlight — Tk format (with leading "#") for the in-app
+# treeview row tag. openpyxl fills use a separate constant elsewhere
+# (logic._OVER_FILL) since openpyxl wants the 6-char hex without "#".
 # ---------------------------------------------------------------------------
 
 _OVER_BG = "#" + HL_MISMATCH
@@ -588,6 +593,15 @@ class SubProgramBudgetReportTool:
                 # the carry-forward column rolls forward across reports
                 # when the user supplied a prior-period XLSX.
                 prior_funds=summary.prior_funds,
+                # Round 62 — propagate the user's materiality slider
+                # so the XLSX Watchlist / pink-fill / auto-fill agree
+                # with the in-app Watchlist tab. Without this the
+                # writer's `materiality_dollar=100` default was used
+                # regardless of the slider setting; users tuning the
+                # "Ignore amounts under" field saw the in-app Watchlist
+                # narrow but the exported XLSX still flagged every
+                # >$100 variance.
+                materiality_dollar=self._cached_materiality_dollar,
             )
         except Exception as exc:
             try:
@@ -623,7 +637,13 @@ class SubProgramBudgetReportTool:
     def _build_result(self, summary: ReportSummary, *, preview: bool = False) -> ToolResult:
         n_lines = len(summary.lines)
         n_faculties = len(summary.faculty_counts)
-        over = summary.over_budget_lines
+        # Round 62 — banner / log counts use the SAME filter as the
+        # in-app Watchlist tab (is_over + is_material) so the two
+        # numbers reconcile. Pre-R62 the banner counted every is_over
+        # line (including immaterial ones below the $ floor) while
+        # the Watchlist label counted only material ones, producing
+        # confusing pairs like "7 lines over budget" + "Watchlist (6)".
+        over = [ln for ln in summary.lines if ln.is_over and ln.is_material]
         n_over = len(over)
         rev_th = summary.revenue_threshold
         exp_th = summary.expense_threshold
