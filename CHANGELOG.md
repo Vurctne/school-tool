@@ -5,6 +5,26 @@ is at the top.
 
 ---
 
+## v2.4.19.0 — May 2026
+
+* **Sub-Program Budget Report — in-app + XLSX Watchlist sort orders
+  aligned.** Pre-fix the in-app sorted per-line by
+  ``-abs(variance_amount)`` while the XLSX Watchlist sheet sorted
+  per-sub-program by signed available ascending — same items,
+  different priority orders, so a council reader scanning either
+  view saw a different row at the top. Both now use ``-abs(variance)``
+  per flagged line: the XLSX picks each sub-program's max |variance|
+  across its is_over+is_material lines and sorts descending, mirroring
+  what an in-app user sees as the "top" item.
+* **Sub-Program Budget Report — dead code removed.** Deleted
+  ``compute_trend``, ``load_prior_period_ytd``, the ``_TREND_*`` pill
+  constants, and ~16 related tests. Round 57 dropped the Trend
+  column from the XLSX output; these helpers had no production
+  callers afterwards (only their own tests kept them alive in
+  grep). Net deletion ~600 lines of source + tests.
+
+---
+
 ## v2.4.18.0 — May 2026
 
 * **Sub-Program Budget Report — Status pill now flags Revenue-over-

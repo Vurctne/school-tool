@@ -2756,181 +2756,10 @@ class TestF1Round2Fixes:
         assert rgb is not None and HL_MISMATCH in rgb.upper()
 
 
-# ---------------------------------------------------------------------------
-# Round 54 F2 — Trend column (Move D) + Watchlist sheet.
-# Status moves from col 13 to col 3 (after PROGRAM NAME); Trend at col 4.
-# ---------------------------------------------------------------------------
-
-
-class TestComputeTrend:
-    """``compute_trend`` returns the period-over-period direction
-    indicator for a sub-program row."""
-
-    def test_trend_values_tuple_has_designed_shape(self) -> None:
-        """R1 fixes: 'New issue' renamed to 'Newly off track' (pill-
-        pattern consistency); 'Stable' dropped from values (reads as
-        'no problem' alongside non-OK Status)."""
-        from tools.sub_program.logic import _TREND_VALUES
-
-        assert _TREND_VALUES == (
-            "Newly off track",
-            "Worsening",
-            "Improving",
-            "Resolved",
-        )
-
-    def test_no_prior_returns_blank(self) -> None:
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("-50000"),
-                prior_available=None,
-            )
-            == ""
-        )
-
-    def test_both_on_track_returns_blank(self) -> None:
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("5000"),
-                prior_available=Decimal("3000"),
-            )
-            == ""
-        )
-
-    def test_newly_off_track_when_current_over_prior_ok(self) -> None:
-        """R1 fix: 'New issue' renamed to 'Newly off track' for pill
-        pattern consistency."""
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("-30000"),
-                prior_available=Decimal("5000"),
-            )
-            == "Newly off track"
-        )
-
-    def test_resolved_when_current_ok_prior_over(self) -> None:
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("2000"),
-                prior_available=Decimal("-30000"),
-            )
-            == "Resolved"
-        )
-
-    def test_worsening_when_overrun_grew_past_materiality(self) -> None:
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("-50000"),
-                prior_available=Decimal("-30000"),
-                materiality_dollar=5000,
-            )
-            == "Worsening"
-        )
-
-    def test_improving_when_overrun_shrank_past_materiality(self) -> None:
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("-30000"),
-                prior_available=Decimal("-50000"),
-                materiality_dollar=5000,
-            )
-            == "Improving"
-        )
-
-    def test_stable_case_returns_blank_not_stable(self) -> None:
-        """R1 fix: 'Stable' was dropped from the values tuple — reads
-        as 'no problem' to a council member when alongside a non-OK
-        Status pill. Both periods over with small delta now returns
-        blank; Status carries the severity, Trend only fires when
-        there's a meaningful direction change."""
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("-30000"),
-                prior_available=Decimal("-32000"),
-                materiality_dollar=5000,
-            )
-            == ""
-        )
-
-    def test_change_below_materiality_floor_is_not_a_trend(self) -> None:
-        from tools.sub_program.logic import compute_trend
-
-        assert (
-            compute_trend(
-                current_available=Decimal("-200"),
-                prior_available=Decimal("-100"),
-                materiality_dollar=5000,
-            )
-            == ""
-        )
-
-
-class TestLoadPriorPeriodYtd:
-    """``load_prior_period_ytd`` reads Available Balance YTD from a
-    prior month's exported XLSX."""
-
-    def _make_prior_xlsx(self, tmp_path: Path) -> Path:
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        assert ws is not None
-        ws.title = "Sub Program Report"
-        ws.cell(row=1, column=1, value="Monthly Sub Program Report")
-        ws.cell(row=2, column=1, value="CODE")
-        ws.cell(row=2, column=2, value="PROGRAM NAME")
-        ws.cell(row=2, column=11, value="Available Balance YTD")
-        ws.cell(row=3, column=1, value="4001")
-        ws.cell(row=3, column=2, value="Art")
-        ws.cell(row=3, column=11, value=12345.67)
-        ws.cell(row=4, column=1, value="7001")
-        ws.cell(row=4, column=2, value="Administration")
-        ws.cell(row=4, column=11, value=-1342953.0)
-        out = tmp_path / "prior.xlsx"
-        wb.save(out)
-        return out
-
-    def test_basic_load(self, tmp_path: Path) -> None:
-        from tools.sub_program.logic import load_prior_period_ytd
-
-        path = self._make_prior_xlsx(tmp_path)
-        result = load_prior_period_ytd(path)
-        assert result["4001"] == Decimal("12345.67")
-        assert result["7001"] == Decimal("-1342953")
-
-    def test_missing_file_raises(self, tmp_path: Path) -> None:
-        from tools.sub_program.logic import load_prior_period_ytd
-
-        with pytest.raises(ValueError, match="not found"):
-            load_prior_period_ytd(tmp_path / "nonexistent.xlsx")
-
-    def test_returns_empty_when_no_available_balance_column(self, tmp_path: Path) -> None:
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        assert ws is not None
-        ws.cell(row=2, column=1, value="Sub-Program")
-        ws.cell(row=2, column=2, value="Title")
-        ws.cell(row=3, column=1, value="4001")
-        ws.cell(row=3, column=2, value="Art")
-        out = tmp_path / "no_avail.xlsx"
-        wb.save(out)
-
-        from tools.sub_program.logic import load_prior_period_ytd
-
-        result = load_prior_period_ytd(out)
-        assert result == {}
+# Round 63 — TestComputeTrend + TestLoadPriorPeriodYtd classes
+# deleted along with the production functions they exercised. The
+# Trend column was dropped from the XLSX in Round 57; the functions
+# had no production callers afterwards.
 
 
 class TestF2XlsxLayout:
@@ -3048,10 +2877,16 @@ class TestF2WatchlistSheet:
                 description="Over",
                 budget=Decimal("100000"),
                 ytd=Decimal(exp_ytd),
-                remaining=Decimal("0"),
-                used_pct=Decimal("0"),
+                remaining=Decimal("100000") - Decimal(exp_ytd),
+                # Round 63: derive consistent used_pct + variance_amount
+                # + is_material so the test data flows through
+                # _recompute_is_over (and the writer's in-place is_material
+                # recompute) without contradictions.
+                used_pct=(Decimal(exp_ytd) / Decimal("100000")) * Decimal("100"),
                 faculty="X",
                 is_over=True,
+                is_material=abs(Decimal(exp_ytd) - Decimal("100000")) >= Decimal("100"),
+                variance_amount=Decimal(exp_ytd) - Decimal("100000"),
             ),
         ]
 
@@ -3076,15 +2911,20 @@ class TestF2WatchlistSheet:
         assert "7001" in codes
         assert "4001" not in codes
 
-    def test_watchlist_sorted_by_signed_available_asc(self, tmp_path: Path) -> None:
-        """R1 fix: sort by signed available ASCENDING (most negative
-        first). Pre-fix sorted by abs(available) descending which
-        lumped over-spends with under-spends."""
+    def test_watchlist_sorted_by_max_variance_desc(self, tmp_path: Path) -> None:
+        """Round 63: sort by max |variance_amount| across the
+        sub-program's lines, descending. Mirrors the in-app Watchlist
+        tab order so a council reader scanning either view sees the
+        same item at the top. Pre-R63 the XLSX sorted by signed
+        available ascending and the in-app sorted by -abs(variance),
+        producing different orderings of the same sub-program set."""
         out = tmp_path / "out.xlsx"
+        # _over_pair builds Expenditure lines with budget=$100K and
+        # ytd as supplied. |variance| = |ytd - 100,000|.
         rows = (
-            self._over_pair("1001", "150000")  # available = -$50K
-            + self._over_pair("2001", "300000")  # available = -$200K
-            + self._over_pair("3001", "120000")  # available = -$20K
+            self._over_pair("1001", "150000")  # |var| = $50K
+            + self._over_pair("2001", "300000")  # |var| = $200K
+            + self._over_pair("3001", "120000")  # |var| = $20K
         )
         _write_xlsx(rows, out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
@@ -3094,6 +2934,7 @@ class TestF2WatchlistSheet:
             v = ws.cell(row=r, column=1).value
             if v is not None:
                 codes.append(str(v))
+        # Biggest variance ($200K = 2001) first; smallest ($20K = 3001) last.
         assert codes == ["2001", "1001", "3001"]
 
 
@@ -3106,87 +2947,10 @@ class TestF2WatchlistSheet:
 class TestF2Round1Fixes:
     """Targeted tests pinning the F2 R1 fixes."""
 
-    def test_compute_trend_uses_current_status_for_threshold_rows(self) -> None:
-        """When ``current_status`` is supplied, it gates the
-        "current_over" decision instead of the raw available signal.
-        Prevents the contradictory "Status: On track | Trend:
-        Worsening" pairing on rows whose Status comes from the
-        Round-56 threshold-based pill."""
-        from tools.sub_program.logic import compute_trend
-
-        # available is deeply negative but Status says On track (under
-        # the expense threshold). Without status gating, this would fire
-        # Worsening (both over, delta > mat). With status gating,
-        # current_over=False so the trend says Resolved (prior was over,
-        # current isn't).
-        assert (
-            compute_trend(
-                current_available=Decimal("-50000"),
-                prior_available=Decimal("-30000"),
-                current_status="On track",
-                materiality_dollar=5000,
-            )
-            == "Resolved"
-        )
-
-    def test_compute_trend_status_off_track_overrides_available_signal(
-        self,
-    ) -> None:
-        """A row whose Status is non-OK but available appears on-track
-        via raw signal still fires Trend correctly."""
-        from tools.sub_program.logic import compute_trend
-
-        # available > 0 (positive surplus look) but status is non-OK
-        # (e.g. Spent without budget despite a near-zero net).
-        result = compute_trend(
-            current_available=Decimal("10000"),
-            prior_available=Decimal("8000"),
-            current_status="Spent without budget",
-            materiality_dollar=5000,
-        )
-        # current_over=True (status != On track), prior_over=False →
-        # Newly off track.
-        assert result == "Newly off track"
-
-    def test_load_prior_period_ytd_skips_watchlist_sheet(self, tmp_path: Path) -> None:
-        """R1 fix: load_prior_period_ytd skips a sheet titled
-        "Watchlist" — its data is FILTERED (only non-OK rows), so
-        treating it as a prior-period source would mis-fire the trend
-        logic for healthy programs from last month."""
-        # Build a workbook with both a populated "Sub Program Report"
-        # AND an incomplete "Watchlist" — the reader must use only the
-        # main sheet's data.
-        wb = openpyxl.Workbook()
-        # Sub Program Report sheet (full data).
-        main = wb.active
-        assert main is not None
-        main.title = "Sub Program Report"
-        main.cell(row=2, column=1, value="CODE")
-        main.cell(row=2, column=11, value="Available Balance YTD")
-        main.cell(row=3, column=1, value="4001")
-        main.cell(row=3, column=11, value=12345.67)
-        main.cell(row=4, column=1, value="7001")
-        main.cell(row=4, column=11, value=-150000.0)
-        # Watchlist sheet (only over-budget row 7001; missing 4001).
-        wl = wb.create_sheet("Watchlist")
-        wl.cell(row=2, column=1, value="CODE")
-        wl.cell(row=2, column=11, value="Available Balance YTD")
-        wl.cell(row=3, column=1, value="7001")
-        wl.cell(row=3, column=11, value=-150000.0)
-        out = tmp_path / "two_sheet.xlsx"
-        wb.save(out)
-
-        from tools.sub_program.logic import load_prior_period_ytd
-
-        result = load_prior_period_ytd(out)
-        # 4001 must be present — it's only on the main sheet, not on
-        # Watchlist. Without the R1 skip, the loop would visit
-        # Watchlist after the main and the dict would still have 4001
-        # from the earlier visit, but a subtle ordering bug could
-        # invert this. Pin both keys present.
-        assert "4001" in result
-        assert "7001" in result
-        assert result["4001"] == Decimal("12345.67")
+    # Round 63 — three test methods (test_compute_trend_uses_current_status_for_threshold_rows,
+    # test_compute_trend_status_off_track_overrides_available_signal,
+    # test_load_prior_period_ytd_skips_watchlist_sheet) deleted with
+    # the production functions they exercised.
 
     def test_xlsx_active_sheet_is_sub_program_report(self, tmp_path: Path) -> None:
         """R1 fix: ``wb.active`` pinned to the main sheet so Excel
@@ -3514,12 +3278,5 @@ class TestF2Round2Fixes:
         footer_left = ws.oddFooter.left.text if ws.oddFooter is not None else None
         assert footer_left == "Generated by School Tool"
 
-    def test_compute_trend_documents_status_aligned_recommendation(self) -> None:
-        """R2 documentation: the docstring tells callers about the
-        documented dollar-only / percent-floor asymmetry when
-        ``current_status`` is omitted."""
-        from tools.sub_program.logic import compute_trend
-
-        doc = compute_trend.__doc__ or ""
-        assert "current_status" in doc
-        assert "asymmetry" in doc.lower()
+    # Round 63 — test_compute_trend_documents_status_aligned_recommendation
+    # deleted along with the compute_trend function.

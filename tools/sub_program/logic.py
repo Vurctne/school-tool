@@ -555,212 +555,10 @@ def cap_percent_for_display(pct: Decimal | float | int | None) -> Decimal | None
     return p
 
 
-# ---------------------------------------------------------------------------
-# Round 54 F2 — Trend column (Move D)
-# ---------------------------------------------------------------------------
-# The XLSX gains a Trend column (col 4 in the F2 layout) showing the
-# period-over-period direction of the variance. Requires a prior-period
-# XLSX (the tool's own export from last month) to be supplied; without
-# it the column is blank for every row and a sheet-level footer note
-# explains why.
-
-# R1 fix: "New issue" was a noun; the other 4 trend values are
-# participles. Renamed for pill-pattern consistency.
-_TREND_NEW_ISSUE = "Newly off track"
-_TREND_WORSENING = "Worsening"
-_TREND_IMPROVING = "Improving"
-_TREND_RESOLVED = "Resolved"
-
-# R1 fix: "Stable" dropped from the values tuple. Both periods
-# over-track with a small delta now returns blank — the variance-
-# analysis purist flagged that "Stable" alongside a "Significant
-# overspend" Status reads as "no problem" to a council member.
-# Status carries the severity; Trend only fires when there's a
-# meaningful direction.
-_TREND_VALUES: tuple[str, ...] = (
-    _TREND_NEW_ISSUE,
-    _TREND_WORSENING,
-    _TREND_IMPROVING,
-    _TREND_RESOLVED,
-)
-
-
-def compute_trend(
-    *,
-    current_available: Decimal,
-    prior_available: Decimal | None,
-    current_status: str = "",
-    materiality_dollar: int = 100,
-) -> str:
-    """Return a Trend pill for one sub-program row.
-
-    ``current_available`` and ``prior_available`` are signed YTD net
-    positions — negative means over-drawn. ``prior_available`` is
-    ``None`` when no prior-period XLSX was supplied.
-
-    R1 fix: ``current_status`` (the pill string from
-    :func:`compute_status_pill`) is accepted to keep Status and Trend
-    in sync for pacing-aware Expenditure-only programs. Without this,
-    a row that Status reports as "On track" (because exp_y is at
-    calendar pace) but whose ``available`` is deeply negative could
-    show Trend "Worsening" — same row, opposite stories.
-
-    R2 documented asymmetry: callers that DO NOT pass
-    ``current_status`` fall back to ``current_available < -mat`` for
-    "current_over". This is a strict-dollar test only — it does NOT
-    apply the "$500 noise floor" or the ">50% percent floor" that
-    Status uses (see :func:`compute_status_pill`). For a $4K-overrun
-    on a $200 budget (2,000% over), Status fires "Slightly over" via
-    the percent floor but compute_trend's fallback would not flag
-    "current_over" because $4K < $5K materiality. The production
-    writer in this module always passes ``current_status``, so this
-    asymmetry only affects ad-hoc / direct callers of
-    ``compute_trend``. Callers needing Status-aligned classification
-    should pass ``current_status``.
-
-    Decision tree:
-
-    * No prior data → blank.
-    * Both periods within the materiality dollar floor → blank
-      (chart-of-accounts noise).
-    * Current off-track AND prior on-track → ``Newly off track``.
-    * Current on-track AND prior off-track → ``Resolved``.
-    * Both off-track → compare overrun magnitudes:
-      change > materiality → ``Worsening`` / ``Improving``;
-      change ≤ materiality → blank (R1 fix: dropped ``Stable``
-      because alongside a non-OK Status it reads as "no problem"
-      when the row is still significantly off).
-    """
-    if prior_available is None:
-        return ""
-    mat = Decimal(str(materiality_dollar))
-    # R1 fix: when Status is supplied, use it as the source of truth
-    # for "is the row currently off-track" — keeps Status and Trend
-    # synchronised for pacing-aware programs. Falls back to the raw
-    # ``available`` comparison for callers that don't pass status.
-    if current_status:
-        current_over = current_status != _STATUS_ON_TRACK
-    else:
-        current_over = current_available < -mat
-    prior_over = prior_available < -mat
-    if not current_over and not prior_over:
-        return ""
-    if current_over and not prior_over:
-        return _TREND_NEW_ISSUE
-    if not current_over and prior_over:
-        return _TREND_RESOLVED
-    # Both off-track — measure direction of change in overrun magnitude.
-    current_overrun = -current_available
-    prior_overrun = -prior_available
-    delta = current_overrun - prior_overrun
-    if delta > mat:
-        return _TREND_WORSENING
-    if delta < -mat:
-        return _TREND_IMPROVING
-    # Stable case (small delta between two off-track periods) → blank.
-    return ""
-
-
-# ---------------------------------------------------------------------------
-# Round 54 F2 — Prior-period YTD extraction
-# ---------------------------------------------------------------------------
-# Reads the Available Balance YTD column out of a prior-month's
-# exported XLSX so :func:`compute_trend` can compute period-over-
-# period direction. The tool's own export carries this column; a
-# pre-Phase-D file (or any file lacking it) returns an empty dict.
-
-
-def load_prior_period_ytd(xlsx_path: Path) -> dict[str, Decimal]:
-    """Return ``{sub_program_code: available_balance_ytd}`` for every
-    data row in the supplied prior-period XLSX.
-
-    Empty dict when the file is supplied but doesn't carry the
-    Available Balance YTD column (e.g. a pre-Phase-D export, or a
-    completely different shape). Raises ``ValueError`` when the file
-    is missing — callers that pass an optional path are responsible
-    for the None check upstream.
-
-    The column is found by header-name match (case-insensitive). The
-    sub-program code is taken from the column whose header matches
-    one of CODE / Sub-Program / Sub Prog. (case-insensitive). Walks
-    every worksheet in the workbook — the tool's own exports may
-    expand to multiple sheets in a future round.
-    """
-    if not xlsx_path.exists():
-        raise ValueError(f"Prior-period file not found: {xlsx_path}")
-
-    wb = openpyxl.load_workbook(xlsx_path, data_only=True, read_only=True)
-    try:
-        result: dict[str, Decimal] = {}
-        # Synonyms for the code column. ``CODE`` is the canonical R51+
-        # header; older exports may have ``Sub-Program`` or ``Sub Prog.``.
-        code_synonyms = ("code", "sub-prog", "sub prog", "sub program", "sub-program")
-        for sheet_name in wb.sheetnames:
-            # R1 fix: skip the Watchlist sheet — its data rows are a
-            # FILTERED subset (only sub-programs with non-OK Status).
-            # If we walked Watchlist, we'd build a prior_ytd dict
-            # missing every healthy sub-program from last month, and
-            # "Newly off track" trend signals for those programs would
-            # mis-fire as blank instead of firing.
-            if sheet_name.lower() == "watchlist":
-                continue
-            ws = wb[sheet_name]
-            rows = list(ws.iter_rows(values_only=True))
-            if len(rows) < 2:
-                continue
-            # The header may be at row 1 or row 2 (R51+ exports have a
-            # merged title at row 1 and headers at row 2).
-            for header_row_idx in (1, 0):
-                if header_row_idx >= len(rows):
-                    continue
-                header_raw = rows[header_row_idx]
-                header = [str(c).strip() if c is not None else "" for c in header_raw]
-                header_lower = [h.lower() for h in header]
-                code_col: int | None = None
-                for i, h in enumerate(header_lower):
-                    if any(syn in h for syn in code_synonyms):
-                        code_col = i
-                        break
-                avail_col: int | None = None
-                for i, h in enumerate(header_lower):
-                    if "available balance" in h and "ytd" in h and "%" not in h:
-                        avail_col = i
-                        break
-                if code_col is None or avail_col is None:
-                    continue
-                # Walk data rows starting after the header.
-                for data_row in rows[header_row_idx + 1 :]:
-                    if not data_row:
-                        continue
-                    sp_raw = (
-                        data_row[code_col]
-                        if code_col < len(data_row) and data_row[code_col] is not None
-                        else None
-                    )
-                    if sp_raw is None:
-                        continue
-                    sp = str(sp_raw).strip()
-                    # Strip a trailing ``.0`` from float-coerced codes
-                    # ("4001.0" → "4001"). Code column values are
-                    # numeric in the writer but openpyxl may surface
-                    # them as floats on read.
-                    if sp.endswith(".0"):
-                        sp = sp[:-2]
-                    if not sp.replace(".", "").isdigit():
-                        continue
-                    avail_raw = data_row[avail_col] if avail_col < len(data_row) else None
-                    if avail_raw is None:
-                        continue
-                    try:
-                        result[sp] = Decimal(str(avail_raw))
-                    except (InvalidOperation, ValueError):
-                        continue
-                # Found the right header on this sheet — stop trying
-                # row 0 once row 1 worked.
-                break
-        return result
-    finally:
-        wb.close()
+# Round 62 — Trend column functions deleted. The Trend feature
+# was dropped from the XLSX in Round 57; compute_trend and
+# load_prior_period_ytd had no production callers afterwards (only
+# their own tests). Removed in Round 63 to clear the dead code.
 
 
 def load_prior_period_funds(xlsx_path: Path) -> dict[str, Decimal]:
@@ -2103,14 +1901,36 @@ def _write_monthly_sub_program_sheet(
     # Pre-R60 the filter used ``status != "On track"`` which checks
     # only the Expenditure side and missed Revenue-over-budget rows.
     if filter_to_non_ok or sort_by_variance_desc:
-        annotated: list[tuple[str, Decimal, str]] = []  # (sp, available, status)
+        # Round 63 — per-sub-program max |variance_amount| across the
+        # sub-program's FLAGGED lines (is_over AND is_material). Used
+        # below as the sort key so the XLSX Watchlist order matches
+        # the in-app Watchlist tab, which sorts per-line by
+        # ``-abs(variance_amount)``. Restricting to flagged lines is
+        # essential: each in-app row IS a flagged line, so the in-app's
+        # |variance| is the flagged-line variance — not the max across
+        # both Revenue + Expenditure sides. Without this restriction
+        # an over-collected Revenue line ($2K over) on a sub-program
+        # with a large under-spent Expenditure side ($30K unspent)
+        # would sort by the unspent $30K, putting the row much higher
+        # than the in-app does. The same in-place is_material recompute
+        # used for ``sps_on_watchlist`` (above) gives the writer self-
+        # contained behaviour against synthetic test callers.
+        sp_max_variance: dict[str, Decimal] = {}
+        for ln in lines:
+            is_material_now = abs(ln.ytd - ln.budget) >= Decimal(str(materiality_dollar))
+            if not (ln.is_over and is_material_now):
+                continue
+            sp_max_variance[ln.sub_program] = max(
+                sp_max_variance.get(ln.sub_program, Decimal("0")),
+                abs(ln.variance_amount),
+            )
+
+        annotated: list[tuple[str, Decimal, str]] = []  # (sp, max_variance, status)
         for sp in sub_programs:
             ry = rev_y.get(sp, Decimal("0"))
             ey = exp_y.get(sp, Decimal("0"))
             rb = rev_b.get(sp, Decimal("0"))
             eb = exp_b.get(sp, Decimal("0"))
-            oo = orders.get(sp, Decimal("0"))
-            avail = ry - ey - oo
             status = compute_status_pill(
                 annual_exp_budget=eb,
                 exp_ytd=ey,
@@ -2120,17 +1940,14 @@ def _write_monthly_sub_program_sheet(
                 expense_threshold=expense_threshold,
                 materiality_dollar=materiality_dollar,
             )
-            annotated.append((sp, avail, status))
+            annotated.append((sp, sp_max_variance.get(sp, Decimal("0")), status))
         if filter_to_non_ok:
             annotated = [t for t in annotated if t[0] in sps_on_watchlist]
         if sort_by_variance_desc:
-            # R1 fix: sort by SIGNED available ascending so the most
-            # negative (worst overspends) lead and the most positive
-            # (large unspent surpluses) trail. Pre-fix used
-            # ``abs(available)`` which lumped over-spends with
-            # under-spends — a $50K unspent program would outrank a
-            # $40K overspend on the council priority view.
-            annotated.sort(key=lambda t: t[1])
+            # Round 63 — sort by |max variance| descending, tied-break
+            # by sub_program ascending. Mirrors the in-app Watchlist
+            # tab key ``(-abs(ln.variance_amount), ln.sub_program)``.
+            annotated.sort(key=lambda t: (-t[1], t[0]))
         sub_programs = [t[0] for t in annotated]
 
     # ----- Title row (merged across 13 cols in R57) -----

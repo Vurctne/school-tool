@@ -7,7 +7,7 @@ APP_NAME = "School Tool"
 # REVISION must stay at 0 — Microsoft Store rejects MSIX submissions with
 # REVISION != 0. Bump MAJOR/MINOR manually; reset BUILD/REVISION to 0/0
 # when you do.
-APP_VERSION = "2.4.18.0"
+APP_VERSION = "2.4.19.0"
 APP_AUTHOR = "Vurctne"
 APP_TITLE = f"{APP_NAME} v{APP_VERSION}"
 SUPPORT_EMAIL = "feedback@schooltool.com.au"
