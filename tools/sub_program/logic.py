@@ -815,18 +815,23 @@ _NUM_PART_RE = re.compile(r"^[\-\$]?[\d,]+(\.\d+)?$|^\([\d,]+(\.\d+)?\)$")
 
 
 # Regex to extract the print-date footer: "3 March 2026 13:37 1 [GL21157]"
-# Capture group 1: "Month YYYY" string used as the period label.
+# Capture group 1: "D Month YYYY" string used as the period label.
+# Round 65 widened the capture from "Month YYYY" to "D Month YYYY" so
+# the workbook title shows the actual print date (which is the YTD
+# cut-off the CASES21 export was run for) rather than just the
+# month. Council readers care about WHICH day the snapshot was taken
+# — early-month vs end-of-month numbers can differ materially.
 _FOOTER_DATE_RE = re.compile(
-    r"\d{1,2}\s+([A-Z][a-z]+\s+\d{4})\s+\d{2}:\d{2}\s+\d+\s+\[GL",
+    r"(\d{1,2}\s+[A-Z][a-z]+\s+\d{4})\s+\d{2}:\d{2}\s+\d+\s+\[GL",
     re.IGNORECASE,
 )
 
 
 def _extract_period_label(text: str) -> str:
-    """Return 'Month YYYY' from the GL21157 page-footer date, or '' if not found.
+    """Return 'D Month YYYY' from the GL21157 page-footer date, or '' if not found.
 
     The footer format is: ``3 March 2026 13:37 1 [GL21157]``
-    This function extracts ``March 2026`` from that pattern.
+    This function extracts ``3 March 2026`` from that pattern.
     """
     m = _FOOTER_DATE_RE.search(text)
     if m:
@@ -1818,7 +1823,7 @@ def _write_monthly_sub_program_sheet(
     7.  Revenue YTD                          revenue collected so far
     8.  Expenditure YTD                      expenditure spent so far
     9.  Less outstanding orders              committed-but-not-paid
-    10. Available Balance YTD                =D{r}+G{r}-H{r}-I{r}
+    10. Available Balance YTD                =F{r}-H{r}-I{r}
     11. Available Balance % YTD              =J{r}/F{r}
     12. Revenue Budget % Received YTD        =G{r}/E{r}
     13. Comments                             commentary
@@ -2077,12 +2082,17 @@ def _write_monthly_sub_program_sheet(
             c = ws.cell(row=row_idx, column=col_idx, value=float(value))
             c.number_format = _ACCOUNTING_FMT
 
-        # Round 57 — Available Balance YTD (col 10/J) as Excel formula.
-        # The formula references col D (Funds), G (Revenue YTD),
-        # H (Expenditure YTD), I (Outstanding orders).
-        # Empty Funds cell evaluates to 0 in Excel arithmetic so the
-        # formula works whether or not col D is populated.
-        avail_formula = f"=D{row_idx}+G{row_idx}-H{row_idx}-I{row_idx}"
+        # Round 65 — Available Balance YTD (col 10/J) formula now
+        # mirrors the KMAR reference workbook's semantics:
+        #   Available Balance = Annual Expenditure Budget − Expenditure YTD − Outstanding Orders
+        # i.e. "how much expenditure budget is left to spend after
+        # committed orders settle". Pre-R65 used =D+G-H-I (Funds +
+        # Revenue YTD − Expenditure YTD − Orders) which mixed cash-
+        # flow signals with budget-remaining signals and didn't match
+        # the council-facing KMAR template. For 7001 Administration:
+        #   KMAR (R65): $581,700 − $192,126 − $1,732,527 = −$1,342,953
+        #   Pre-R65:   0 + $26,436 − $192,126 − $1,732,527 = −$1,898,217
+        avail_formula = f"=F{row_idx}-H{row_idx}-I{row_idx}"
         avail_cell = ws.cell(row=row_idx, column=10, value=avail_formula)
         avail_cell.number_format = _ACCOUNTING_FMT
 
@@ -2251,6 +2261,27 @@ def _write_monthly_sub_program_sheet(
     # paper trail. Round 57: 13 cols (A:M) after Trend dropped.
     last_data_row = max(2, 2 + len(sub_programs))
     ws.print_area = f"A1:M{last_data_row}"
+
+    # Round 65 — green data bar on Available Balance YTD (col J)
+    # gives the council reader an at-a-glance sense of how much
+    # budget remains across the page. start_type="min" /
+    # end_type="max" lets Excel auto-scale to the actual data range
+    # so the bar is meaningful regardless of the absolute dollar
+    # magnitudes. The Revenue detail sheet uses the same green bar
+    # on its % Budget received column for visual consistency.
+    if sub_programs:
+        from openpyxl.formatting.rule import DataBarRule
+
+        avail_range = f"J3:J{last_data_row}"
+        ws.conditional_formatting.add(
+            avail_range,
+            DataBarRule(  # type: ignore[no-untyped-call]
+                start_type="min",
+                end_type="max",
+                color=_DATA_BAR_COLOR,
+                showValue=True,
+            ),
+        )
 
     # F2 R1: AutoFilter + tab colour on the Watchlist sheet so the
     # council-targeted view is interactive and visually distinct.

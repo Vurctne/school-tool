@@ -844,15 +844,18 @@ class TestXlsxMonthlyReport:
 
 class TestPeriodLabel:
     def test_extract_period_label_from_footer(self) -> None:
+        """Round 65 — capture widened to include the day of month so
+        the workbook title shows the actual print date (the YTD
+        cut-off the CASES21 export was run for), not just the month."""
         text = "3 March 2026 13:37 1 [GL21157]"
-        assert _extract_period_label(text) == "March 2026"
+        assert _extract_period_label(text) == "3 March 2026"
 
     def test_extract_period_label_no_match_returns_empty(self) -> None:
         assert _extract_period_label("no date here") == ""
 
     def test_sheet_title_with_period(self) -> None:
-        assert _sheet_title("Report", "January 2026", "Revenue") == (
-            "Report - January 2026 Revenue"
+        assert _sheet_title("Report", "3 January 2026", "Revenue") == (
+            "Report - 3 January 2026 Revenue"
         )
 
     def test_sheet_title_without_period(self) -> None:
@@ -873,8 +876,8 @@ class TestPeriodLabel:
         assert summary.period_label, (
             "period_label is empty -- check the footer regex against the sample PDF"
         )
-        # The sample PDF is from March 2026.
-        assert summary.period_label == "March 2026"
+        # The sample PDF was printed on 3 March 2026.
+        assert summary.period_label == "3 March 2026"
 
     def test_summary_period_label_empty_for_xlsx_input(self, tmp_path: Path) -> None:
         """XLSX-sourced input has no footer date, so period_label defaults to ''."""

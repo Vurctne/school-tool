@@ -5,6 +5,35 @@ is at the top.
 
 ---
 
+## v2.4.21.0 — May 2026
+
+* **Sub-Program Budget Report — title shows the actual print date.**
+  The workbook header now reads ``Sub-Program Budget Report — 3 March
+  2026`` instead of just ``March 2026``. The day of month is the YTD
+  cut-off the CASES21 export was run for; council readers care which
+  day the snapshot was taken since early-month vs end-of-month
+  numbers can differ materially. The widened capture also flows into
+  ``ReportSummary.period_label`` so any downstream consumer sees the
+  fuller label.
+* **Sub-Program Budget Report — Available Balance YTD formula
+  matches the KMAR reference.** The formula is now
+  ``=F-H-I`` (Annual Expenditure Budget − Expenditure YTD − Outstanding
+  Orders), reflecting "how much expenditure budget is left to spend
+  after committed orders settle". Pre-fix used ``=D+G-H-I`` (Funds +
+  Revenue YTD − Expenditure YTD − Orders) which mixed cash-flow
+  signals with budget-remaining signals and didn't match the
+  council-facing KMAR template. For 7001 Administration:
+  KMAR/v2.4.21: $581,700 − $192,126 − $1,732,527 = −$1,342,953;
+  pre-fix would have shown −$1,898,217.
+* **Sub-Program Budget Report — green data bar on Available Balance
+  YTD column.** Excel renders an in-cell bar across J3:Jlast that
+  auto-scales to the data range, giving the council reader an at-a-
+  glance sense of how much budget remains across the page. Mirrors
+  the data bar already on the Revenue detail sheet's % Budget
+  received column for visual consistency.
+
+---
+
 ## v2.4.20.0 — May 2026
 
 * **Sub-Program Budget Report — XLSX restored to 4 sheets.** The
