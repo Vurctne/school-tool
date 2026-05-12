@@ -1772,6 +1772,233 @@ def _write_xlsx(
     output_file.parent.mkdir(parents=True, exist_ok=True)
     wb.save(output_file)
 
+    # Round 70 — post-save: inject the Excel x14 dataBar extension on
+    # any percent column whose data has a negative value. openpyxl's
+    # basic v1 dataBar always grows from the cell's LEFT edge so the
+    # Round 68 "axis at 1/10 from left" design didn't render in
+    # Excel — negatives just appeared as nothing. The x14 extension
+    # adds proper axisPosition + negativeFillColor support, so
+    # negatives now render leftward from the axis in red while
+    # positives render rightward from the axis in green.
+    main_sheet_lines = lines
+    watchlist_lines = [
+        ln
+        for ln in lines
+        if (ln.is_over and abs(ln.ytd - ln.budget) >= Decimal(str(materiality_dollar)))
+    ]
+    _inject_x14_data_bars_for_sheet(
+        output_file,
+        sheet_xml_basename="sheet1.xml",  # Sub Program Report
+        lines=main_sheet_lines,
+    )
+    if watchlist_lines:
+        # The Watchlist sheet has its own (filtered) line set; recompute
+        # the per-column negative-presence over that subset so the x14
+        # extension is added only where the column actually contains a
+        # negative value.
+        _inject_x14_data_bars_for_sheet(
+            output_file,
+            sheet_xml_basename="sheet2.xml",  # Watchlist
+            lines=watchlist_lines,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Round 70 — x14 dataBar extension (axis at 1/10 from left for mixed-sign
+# columns). openpyxl's basic v1 dataBar always grows bars from the cell's
+# left edge, so a positive 50% renders as half-width-from-left and a
+# negative -50% renders as zero-width — no axis, no leftward bar. The
+# Excel 2010+ x14 extension supports axisPosition + negativeFillColor for
+# proper axis-aware rendering; openpyxl's high-level API doesn't expose
+# it so we inject the XML directly on the saved file.
+# ---------------------------------------------------------------------------
+
+_X14_DATABAR_REF_URI = "{B025F937-C7B1-47D3-B67F-A62EFF666E3E}"
+_X14_CF_URI = "{78C0D931-6437-407d-A8EE-F0AAD7539E65}"
+_X14_NS = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+_XM_NS = "http://schemas.microsoft.com/office/excel/2006/main"
+# Red palette for the negative-bar fill: a softer rose (not alarm-red)
+# so the negative bar reads as "below zero" not "system error".
+_DATA_BAR_NEG_COLOR = "FFD46A6A"
+
+
+def _has_negative_avail_pct(lines: list[SubProgramLine]) -> bool:
+    """Return True if any sub-program's (Annual Exp Budget − Exp YTD −
+    Outstanding Orders) is negative — i.e. col L renders < 0 and col C
+    (Available Balance %) shows a negative percent."""
+    exp_b: dict[str, Decimal] = {}
+    exp_y: dict[str, Decimal] = {}
+    orders: dict[str, Decimal] = {}
+    for ln in lines:
+        if not ln.account.lower().startswith("expenditure"):
+            continue
+        sp = ln.sub_program
+        exp_b[sp] = exp_b.get(sp, Decimal("0")) + ln.budget
+        exp_y[sp] = exp_y.get(sp, Decimal("0")) + ln.ytd
+        if ln.outstanding_orders:
+            orders[sp] = orders.get(sp, Decimal("0")) + ln.outstanding_orders
+    for sp, eb in exp_b.items():
+        if eb <= 0:
+            continue
+        ey = exp_y.get(sp, Decimal("0"))
+        oo = orders.get(sp, Decimal("0"))
+        if (eb - ey - oo) < 0:
+            return True
+    return False
+
+
+def _has_negative_rev_pct(lines: list[SubProgramLine]) -> bool:
+    """Return True if any sub-program has Revenue YTD < 0 against a
+    non-zero Revenue budget — i.e. col D (Revenue Budget % Received)
+    shows a negative percent."""
+    rev_b: dict[str, Decimal] = {}
+    rev_y: dict[str, Decimal] = {}
+    for ln in lines:
+        if not ln.account.lower().startswith("revenue"):
+            continue
+        sp = ln.sub_program
+        rev_b[sp] = rev_b.get(sp, Decimal("0")) + ln.budget
+        rev_y[sp] = rev_y.get(sp, Decimal("0")) + ln.ytd
+    for sp, rb in rev_b.items():
+        if rb <= 0:
+            continue
+        if rev_y.get(sp, Decimal("0")) < 0:
+            return True
+    return False
+
+
+def _inject_x14_data_bars_for_sheet(
+    xlsx_path: Path,
+    *,
+    sheet_xml_basename: str,
+    lines: list[SubProgramLine],
+) -> None:
+    """Inject Excel x14 dataBar extensions on cols C (Available Balance
+    %) and D (Revenue Budget % Received) when the relevant column
+    has at least one negative value.
+
+    Re-opens the saved XLSX zip, modifies the sheet XML to:
+      1. Append an ``<extLst>`` inside each target ``<cfRule>`` with a
+         unique GUID pointing to the x14 dataBar definition.
+      2. Add a worksheet-level ``<extLst>`` carrying the x14
+         conditional formatting blocks themselves (axisPosition="automatic",
+         negativeFillColor, etc.).
+      3. Add ``x14`` to the worksheet root's ``mc:Ignorable`` so old
+         Excel versions silently skip the extension.
+
+    Sheets that have all-positive data in both columns get no x14
+    injection — the basic v1 dataBar already renders them correctly.
+    """
+    import re
+    import uuid
+    import zipfile
+
+    has_neg_c = _has_negative_avail_pct(lines)
+    has_neg_d = _has_negative_rev_pct(lines)
+    if not (has_neg_c or has_neg_d):
+        # Pure positive data on both columns; basic dataBar suffices.
+        return
+
+    sheet_path = f"xl/worksheets/{sheet_xml_basename}"
+
+    with zipfile.ZipFile(xlsx_path, "r") as zin:
+        entries: dict[str, bytes] = {n: zin.read(n) for n in zin.namelist()}
+
+    if sheet_path not in entries:
+        return
+
+    xml = entries[sheet_path].decode("utf-8")
+
+    targets: list[tuple[str, bool]] = []
+    if has_neg_c:
+        targets.append(("C", True))
+    if has_neg_d:
+        targets.append(("D", True))
+
+    x14_blocks: list[str] = []
+    for col_letter, _ in targets:
+        bar_id = "{" + str(uuid.uuid4()).upper() + "}"
+        # Find the matching <conditionalFormatting sqref="C3:..."> +
+        # <cfRule type="dataBar" ...><dataBar>...</dataBar> and insert
+        # <extLst> before </cfRule>.
+        pattern = re.compile(
+            r'(<conditionalFormatting sqref="'
+            + re.escape(col_letter)
+            + r"\d+(?::"
+            + re.escape(col_letter)
+            + r'\d+)?"[^>]*>\s*'
+            + r'<cfRule[^>]*type="dataBar"[^>]*>\s*'
+            + r"<dataBar[^>]*>.*?</dataBar>\s*"
+            + r")(</cfRule>)",
+            re.DOTALL,
+        )
+        ext_inject = (
+            "<extLst>"
+            f'<ext xmlns:x14="{_X14_NS}" uri="{_X14_DATABAR_REF_URI}">'
+            f"<x14:id>{bar_id}</x14:id>"
+            "</ext>"
+            "</extLst>"
+        )
+        xml, n_subs = pattern.subn(rf"\1{ext_inject}\2", xml, count=1)
+        if n_subs == 0:
+            continue
+
+        # Extract the actual sqref from the modified XML so we mirror it
+        # in the x14 block (handles e.g. "C3:C92" or single "C3").
+        sqref_match = re.search(
+            r'<conditionalFormatting sqref="('
+            + re.escape(col_letter)
+            + r"\d+(?::"
+            + re.escape(col_letter)
+            + r'\d+)?)"',
+            xml,
+        )
+        if sqref_match is None:
+            continue
+        sqref = sqref_match.group(1)
+
+        x14_blocks.append(
+            f'<x14:conditionalFormatting xmlns:xm="{_XM_NS}">'
+            f'<x14:cfRule type="dataBar" id="{bar_id}">'
+            '<x14:dataBar minLength="0" maxLength="100" '
+            'border="1" negativeBarColorSameAsPositive="0" '
+            'axisPosition="automatic">'
+            f'<x14:cfvo type="num"><xm:f>{-1.0 / 9.0}</xm:f></x14:cfvo>'
+            '<x14:cfvo type="num"><xm:f>1</xm:f></x14:cfvo>'
+            f'<x14:borderColor rgb="{_DATA_BAR_COLOR}"/>'
+            f'<x14:negativeFillColor rgb="{_DATA_BAR_NEG_COLOR}"/>'
+            f'<x14:negativeBorderColor rgb="{_DATA_BAR_NEG_COLOR}"/>'
+            '<x14:axisColor rgb="FF000000"/>'
+            "</x14:dataBar>"
+            "</x14:cfRule>"
+            f"<xm:sqref>{sqref}</xm:sqref>"
+            "</x14:conditionalFormatting>"
+        )
+
+    if not x14_blocks:
+        # All target injections failed to find their cfRule — skip.
+        entries[sheet_path] = xml.encode("utf-8")
+        return
+
+    # Append the worksheet-level <extLst> with all x14 blocks. Inserts
+    # right before </worksheet>.
+    worksheet_ext = (
+        "<extLst>"
+        f'<ext uri="{_X14_CF_URI}" xmlns:x14="{_X14_NS}">'
+        "<x14:conditionalFormattings>"
+        f"{''.join(x14_blocks)}"
+        "</x14:conditionalFormattings>"
+        "</ext>"
+        "</extLst>"
+    )
+    xml = xml.replace("</worksheet>", f"{worksheet_ext}</worksheet>", 1)
+
+    entries[sheet_path] = xml.encode("utf-8")
+
+    with zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zout:
+        for name, data in entries.items():
+            zout.writestr(name, data)
+
 
 def _write_monthly_sub_program_sheet(
     ws: Any,

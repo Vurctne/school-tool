@@ -5,6 +5,31 @@ is at the top.
 
 ---
 
+## v2.4.29.0 — May 2026
+
+* **Sub-Program Budget Report — data bars now show a real axis + red
+  negative bars on mixed-sign columns.** Round 68 set the bar range
+  to ``[-1/9, 1]`` intending to place the 0 axis at 10% from the
+  left, but openpyxl writes the basic v1 dataBar XML and Excel's
+  v1 dataBar renders all bars from the cell's left edge — there's no
+  axis concept and negatives never appear. The user (correctly)
+  flagged this: a -433.6% Available Balance % cell was showing as
+  essentially no bar.
+
+  Round 70 fixes it by post-processing the saved XLSX: when col C
+  (Available Balance %) or col D (Revenue Budget % Received) has at
+  least one negative value, the writer injects Excel's x14 dataBar
+  extension with ``axisPosition="automatic"`` + ``negativeFillColor``
+  + ``negativeBorderColor``. Negatives now render leftward from the
+  axis in a soft rose colour; positives render rightward in the same
+  green as before. The basic v1 dataBar stays in place as a fallback
+  for very old Excel versions.
+
+  Columns with all-positive data skip the x14 injection — the basic
+  v1 dataBar already renders correctly there.
+
+---
+
 ## v2.4.28.0 — May 2026
 
 * **Sub-Program Budget Report — Generate report writes the XLSX

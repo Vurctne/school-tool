@@ -2869,6 +2869,43 @@ class TestF2XlsxLayout:
         assert ranges["C"] == (0.0, 1.0)
         assert ranges["D"] == (0.0, 1.0)
 
+    def test_negative_avail_triggers_x14_databar_extension(self, tmp_path: Path) -> None:
+        """Round 70: when col C (Available Balance %) has a negative
+        value, the writer post-processes the saved file to inject the
+        x14 dataBar extension (axisPosition + negativeFillColor). The
+        basic v1 dataBar alone can't render an axis or directional
+        negative fill — bars all grow from the cell's left edge — so
+        the extension is what actually makes the user's
+        "axis at 1/10 from left, negatives in red on the left" design
+        render correctly in Excel."""
+        import zipfile
+
+        out = tmp_path / "x14_check.xlsx"
+        # Engineer a negative avail: $100K exp budget, $300K spent.
+        rev = self._line("7001", "Revenue", "10000", "5000")
+        exp = self._line("7001", "Expenditure", "100000", "300000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        # Read the saved zip directly and assert the x14 extension is in
+        # sheet1.xml (Sub Program Report).
+        with zipfile.ZipFile(out) as zf:
+            sheet1 = zf.read("xl/worksheets/sheet1.xml").decode()
+        assert "x14:dataBar" in sheet1, "x14:dataBar extension missing on sheet1"
+        assert "axisPosition" in sheet1, "axisPosition missing"
+        assert "negativeFillColor" in sheet1, "negativeFillColor missing"
+
+    def test_all_positive_columns_skip_x14_extension(self, tmp_path: Path) -> None:
+        """Round 70: when both percent columns are all-positive, no
+        x14 injection happens — the basic v1 dataBar renders fine."""
+        import zipfile
+
+        out = tmp_path / "positive_only.xlsx"
+        rev = self._line("4001", "Revenue", "10000", "6000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        with zipfile.ZipFile(out) as zf:
+            sheet1 = zf.read("xl/worksheets/sheet1.xml").decode()
+        assert "x14:dataBar" not in sheet1
+
     def test_data_bar_uses_asymmetric_range_when_negative_avail(self, tmp_path: Path) -> None:
         """Round 68: when the Available Balance % column has any
         negative value (over-spent + over-ordered), start = -1/9 so
