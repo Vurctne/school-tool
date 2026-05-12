@@ -1655,8 +1655,10 @@ class TestStatusPill:
     def test_status_values_tuple_has_designed_shape(self) -> None:
         """Pin the status values so a stray edit can't silently drift.
         Round 56 dropped 'No spend yet' along with calendar_pct.
-        Round 62 added 'Revenue over budget' so the Status pill agrees
-        with the Watchlist filter on revenue-side overruns."""
+        Round 62 added the revenue-side pill so the Status pill agrees
+        with the Watchlist filter on revenue-side overruns. Round 71
+        renamed 'Revenue over budget' → 'Revenue exceeded target' and
+        added 'Revenue refunded' for the net-negative direction."""
         from tools.sub_program.logic import _STATUS_VALUES
 
         assert _STATUS_VALUES == (
@@ -1665,7 +1667,8 @@ class TestStatusPill:
             "Significant overspend",
             "Investigate urgently",
             "Spent without budget",
-            "Revenue over budget",
+            "Revenue exceeded target",
+            "Revenue refunded",
         )
 
     def test_on_track_when_under_budget(self) -> None:
@@ -2573,12 +2576,12 @@ class TestF1Round2Fixes:
 
     def test_donation_program_with_unbudgeted_revenue_flags(self) -> None:
         """Round 62: a program with rev_b = 0 but rev_y > 0 (donations
-        / unbudgeted grants) now reads as 'Revenue over budget' when
-        the rev_y is material — council needs to acknowledge the
+        / unbudgeted grants) now flags the revenue pill when the
+        rev_y is material — council needs to acknowledge the
         unplanned income (refund / roll-forward / re-allocate).
-        Pre-R62 the Status pill ignored the Revenue side, so the same
-        row read as 'On track' which contradicted the Watchlist
-        flagging it via the per-line is_over check."""
+        Round 71: the pill is now 'Revenue exceeded target' (was
+        'Revenue over budget' which mis-implied a negative
+        connotation for over-collected revenue)."""
         from tools.sub_program.logic import compute_status_pill
 
         # Donation $5K received (rev_b=0, rev_y=$5K), $3.5K spent of
@@ -2590,7 +2593,7 @@ class TestF1Round2Fixes:
             rev_ytd=Decimal("5000"),
             exp_ytd=Decimal("3500"),
         )
-        assert result == "Revenue over budget"
+        assert result == "Revenue exceeded target"
 
     def test_donation_program_below_materiality_is_on_track(self) -> None:
         """Round 62 boundary: same shape as the test above but rev_y
@@ -2603,6 +2606,74 @@ class TestF1Round2Fixes:
             annual_rev_budget=Decimal("0"),
             rev_ytd=Decimal("50"),  # below $100 mat
             exp_ytd=Decimal("3500"),
+        )
+        assert result == "On track"
+
+    def test_revenue_refunded_fires_when_rev_ytd_materially_negative(self) -> None:
+        """Round 71 O1: net negative revenue (refunds outpaced
+        collections) fires 'Revenue refunded' regardless of expense
+        status or budget side. The variance-analysis principle:
+        a school in net-refund territory needs council attention
+        even if the expense side is clean."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # $2K refunded against $50K rev budget; expense side fine.
+        result = compute_status_pill(
+            annual_exp_budget=Decimal("10000"),
+            annual_rev_budget=Decimal("50000"),
+            rev_ytd=Decimal("-2000"),
+            exp_ytd=Decimal("3000"),
+        )
+        assert result == "Revenue refunded"
+
+    def test_revenue_refunded_below_materiality_is_on_track(self) -> None:
+        """Round 71 O1 boundary: a $50 net refund (below the $100
+        materiality floor) doesn't fire the pill — chart-of-accounts
+        noise threshold suppresses trivial movement."""
+        from tools.sub_program.logic import compute_status_pill
+
+        result = compute_status_pill(
+            annual_exp_budget=Decimal("10000"),
+            annual_rev_budget=Decimal("50000"),
+            rev_ytd=Decimal("-50"),
+            exp_ytd=Decimal("3000"),
+        )
+        assert result == "On track"
+
+    def test_spent_without_budget_fires_when_exp_materially_exceeds_token_revenue(
+        self,
+    ) -> None:
+        """Round 71 F2: a sub-program with no budget on either side
+        and a tiny token revenue ($100 donation) still fires Spent
+        Without Budget if expense materially exceeds the revenue.
+        Pre-R71 the rev_ytd == 0 requirement masked this case."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # $100 donation + $10K spent, no budget anywhere.
+        result = compute_status_pill(
+            annual_exp_budget=Decimal("0"),
+            annual_rev_budget=Decimal("0"),
+            rev_ytd=Decimal("100"),
+            exp_ytd=Decimal("10000"),
+        )
+        assert result == "Spent without budget"
+
+    def test_spent_without_budget_skipped_when_revenue_covers_spend(self) -> None:
+        """Round 71 F2 boundary: when collected revenue covers the
+        expense (no material gap), the pill stays at On track even
+        with no budget on either side. Test data is kept below the
+        materiality floor on the revenue side too so the unbudgeted-
+        revenue branch doesn't independently fire 'Revenue exceeded
+        target'."""
+        from tools.sub_program.logic import compute_status_pill
+
+        # $80 rev, $90 exp, $10 gap < $100 mat → no spent-without-budget;
+        # rev_y < $100 → no Revenue exceeded target either.
+        result = compute_status_pill(
+            annual_exp_budget=Decimal("0"),
+            annual_rev_budget=Decimal("0"),
+            rev_ytd=Decimal("80"),
+            exp_ytd=Decimal("90"),
         )
         assert result == "On track"
 

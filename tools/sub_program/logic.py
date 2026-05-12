@@ -232,10 +232,21 @@ _STATUS_SPENT_WITHOUT_BUDGET = "Spent without budget"
 # plan refunds / roll-forward) but never escalates ahead of
 # Expense-side overruns. The Expense-side buckets always win when
 # both fire on the same row.
-_STATUS_REVENUE_OVER = "Revenue over budget"
+# Round 71 — O2 rename: "Revenue over budget" → "Revenue exceeded
+# target". In school finance parlance, "over budget" usually means
+# bad (overspent); over-collected revenue is generally good. The new
+# label removes the negative connotation and reads naturally:
+# "Revenue exceeded target" = "we got more than expected".
+_STATUS_REVENUE_OVER = "Revenue exceeded target"
+# Round 71 — O1: net negative revenue (refunds outpaced collections)
+# is the only unambiguous under-collection signal without calendar
+# awareness, which Round 56 deliberately removed. Council needs to
+# know when a sub-program has more refunds than receipts.
+_STATUS_REVENUE_REFUNDED = "Revenue refunded"
 
 # Round 56 — "No spend yet" pill dropped along with all calendar-
-# pacing judgements. Round 62 — added "Revenue over budget".
+# pacing judgements. Round 62 — added "Revenue over budget". Round 71
+# — renamed to "Revenue exceeded target" + added "Revenue refunded".
 _STATUS_VALUES: tuple[str, ...] = (
     _STATUS_ON_TRACK,
     _STATUS_SLIGHTLY_OVER,
@@ -243,6 +254,7 @@ _STATUS_VALUES: tuple[str, ...] = (
     _STATUS_URGENT,
     _STATUS_SPENT_WITHOUT_BUDGET,
     _STATUS_REVENUE_OVER,
+    _STATUS_REVENUE_REFUNDED,
 )
 
 # Bucket boundaries for overrun magnitude. Both dollar AND percent
@@ -283,14 +295,26 @@ def compute_status_pill(
         * ``Slightly over`` — anything else past materiality.
 
     Round 62 — Revenue side checked when Expense passes the threshold.
+    Round 71 (O2) — ``Revenue over budget`` renamed to
+    ``Revenue exceeded target`` to remove the negative connotation
+    of "over budget" for what's usually good news.
 
-    * ``Revenue over budget`` — when expense isn't over-budget but
-      revenue YTD materially exceeds the revenue threshold (default
-      101% of annual revenue budget). Sits at the bottom of the
-      urgency stack — over-collection is generally benign but council
-      needs to acknowledge it (refund parents, roll forward, or
-      adjust the budget). Expense-side buckets always win when both
-      fire on the same row.
+    * ``Revenue exceeded target`` — when expense isn't over-budget
+      but revenue YTD materially exceeds the revenue threshold
+      (default 101% of annual revenue budget). Sits at the bottom of
+      the urgency stack — over-collection is generally benign but
+      council needs to acknowledge it (refund parents, roll forward,
+      or adjust the budget). Expense-side buckets always win when
+      both fire on the same row.
+
+    Round 71 (O1) — added ``Revenue refunded`` for the inverse
+    direction:
+
+    * ``Revenue refunded`` — when revenue YTD is materially negative
+      (refunds outpaced receipts). The only unambiguous under-
+      collection signal without calendar-pacing context. Fires
+      regardless of budget side or expense status, ahead of the
+      "exceeded target" check.
 
     Round 56 dropped from the prior contract:
 
@@ -303,44 +327,66 @@ def compute_status_pill(
     mat = Decimal(str(materiality_dollar))
 
     # Spent without budget — truly unbudgeted spend.
-    if annual_exp_budget == 0 and annual_rev_budget == 0 and rev_ytd == 0 and exp_ytd > 0:
+    # Round 71 F2: previously required rev_ytd == 0 too, which masked
+    # the case where a sub-program collected a small token of revenue
+    # ($100 donation) and then spent $10K against it (no budget on
+    # either side). Now fires when both budgets are zero AND the
+    # expense YTD materially exceeds whatever revenue was collected —
+    # i.e. someone spent money that wasn't covered by either a budget
+    # or by collected revenue. Cost-recovery programs with a real
+    # rev budget (rev_b > 0) still don't fire because the rev_b == 0
+    # clause above is unchanged.
+    if (
+        annual_exp_budget == 0
+        and annual_rev_budget == 0
+        and exp_ytd > 0
+        and (exp_ytd - rev_ytd) >= mat
+    ):
         return _STATUS_SPENT_WITHOUT_BUDGET
 
-    # Helper closure: does the Revenue side qualify for the
-    # "Revenue over budget" pill? Defined once and reused at every
-    # "else → On track" branch so we don't accidentally skip the
-    # check on some code paths.
-    def _revenue_over() -> bool:
+    # Helper closure: revenue-side pill, if any. Returns a status
+    # string or None. Defined once and reused at every "else →
+    # On track" branch so we don't accidentally skip the check on
+    # some code paths.
+    def _revenue_status() -> str | None:
+        # Round 71 O1: net negative revenue (refunds outpaced
+        # collections) is concerning regardless of budget side or
+        # calendar. Fires first because a refunded program with an
+        # otherwise on-track expense side still needs the council
+        # to know about the cash flow direction.
+        if rev_ytd < -mat:
+            return _STATUS_REVENUE_REFUNDED
+
         rev_th = Decimal(str(revenue_threshold))
         # Unbudgeted revenue collected (e.g. surprise donation under
-        # a sub-program with no rev budget but the school received
-        # money) → flag if material.
+        # a sub-program with no rev budget) → flag if positive and
+        # material. Negative case was already handled above.
         if annual_rev_budget == 0:
-            return bool(rev_ytd != 0 and abs(rev_ytd) >= mat)
+            if rev_ytd > 0 and rev_ytd >= mat:
+                return _STATUS_REVENUE_OVER
+            return None
         # Budgeted revenue exceeds the threshold AND the dollar
         # overshoot meets the materiality floor.
         used = rev_ytd / annual_rev_budget * Decimal("100")
         if used <= rev_th:
-            return False
+            return None
         threshold_dollars = annual_rev_budget * rev_th / Decimal("100")
         overrun = rev_ytd - threshold_dollars
-        return bool(abs(overrun) >= mat)
+        if abs(overrun) >= mat:
+            return _STATUS_REVENUE_OVER
+        return None
 
     # No expense budget allocated and no spend on expense side. Check
-    # the revenue side before concluding "On track" — a fundraising
-    # sub-program with $0 expense budget but rev YTD > rev budget
-    # IS council-relevant.
+    # the revenue side before concluding "On track".
     if annual_exp_budget == 0:
-        if _revenue_over():
-            return _STATUS_REVENUE_OVER
-        return _STATUS_ON_TRACK
+        rev_pill = _revenue_status()
+        return rev_pill if rev_pill else _STATUS_ON_TRACK
 
     threshold = Decimal(str(expense_threshold))
     used_pct = exp_ytd / annual_exp_budget * Decimal("100")
     if used_pct <= threshold:
-        if _revenue_over():
-            return _STATUS_REVENUE_OVER
-        return _STATUS_ON_TRACK
+        rev_pill = _revenue_status()
+        return rev_pill if rev_pill else _STATUS_ON_TRACK
 
     # Over budget on expense. Compute overrun in dollar AND in percent
     # past the threshold so the materiality floor + bucketing logic can
@@ -352,16 +398,14 @@ def compute_status_pill(
     # Hard $500 noise floor — chart-of-accounts placeholder rows
     # below this magnitude are not council-grade attention.
     if overrun < Decimal("500"):
-        if _revenue_over():
-            return _STATUS_REVENUE_OVER
-        return _STATUS_ON_TRACK
+        rev_pill = _revenue_status()
+        return rev_pill if rev_pill else _STATUS_ON_TRACK
 
     # Materiality floor — overrun below BOTH dollar and percent
     # floors collapses back to On track (or Revenue-over if applicable).
     if overrun < mat and pct_over <= Decimal("50"):
-        if _revenue_over():
-            return _STATUS_REVENUE_OVER
-        return _STATUS_ON_TRACK
+        rev_pill = _revenue_status()
+        return rev_pill if rev_pill else _STATUS_ON_TRACK
 
     # Expense-side urgency tiers — these always win over Revenue.
     if overrun > _STATUS_URGENT_DOLLAR or pct_over > _STATUS_URGENT_PCT:
@@ -1523,8 +1567,15 @@ def _recompute_is_over(
         # used_pct = 0 from the parser (division-by-zero defended) but
         # is unambiguously over budget. Flag those rows directly so
         # they don't slip past the percentage gate.
-        zero_budget_with_spend = ln.budget == Decimal("0") and ln.ytd != Decimal("0")
-        new_is_over = float(ln.used_pct) > section_th or zero_budget_with_spend
+        # Round 71 O3: extend the unbudgeted-spend guard to cover
+        # negative-budget rows too. CASES21 doesn't typically emit
+        # negative budgets, but the pre-R71 ``== 0`` check would have
+        # silently skipped them and let a row with budget=-1000 and
+        # ytd=500 fall through to "is_over=False". The new ``<= 0``
+        # check fires on any row where there's no positive budget
+        # backing the spend.
+        unbudgeted_with_spend = ln.budget <= Decimal("0") and ln.ytd != Decimal("0")
+        new_is_over = float(ln.used_pct) > section_th or unbudgeted_with_spend
 
         new_variance_amount = ln.ytd - ln.budget
         new_variance_pct = (

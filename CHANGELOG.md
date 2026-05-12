@@ -5,6 +5,37 @@ is at the top.
 
 ---
 
+## v2.4.30.0 — May 2026
+
+* **Sub-Program Budget Report — Status pill audit fixes (F2 + O1
+  + O2 + O3).** From the financial-statements audit:
+  * **F2 — Spent without budget no longer silenced by trivial
+    revenue.** Pre-fix the pill required ``rev_ytd == 0`` to fire,
+    so a sub-program with a $100 donation and $10,000 of unbudgeted
+    spend read as "On track". Now fires when ``exp_y − rev_y >=
+    materiality_dollar`` — captures the genuinely unbudgeted-spend
+    pattern regardless of incidental revenue activity.
+  * **O1 — New "Revenue refunded" pill** fires when revenue YTD is
+    materially negative (refunds outpaced receipts). Without
+    calendar awareness (deliberately removed in Round 56), this is
+    the only unambiguous under-collection signal. Council needs to
+    know about net-refund sub-programs even when the expense side
+    is clean.
+  * **O2 — "Revenue over budget" renamed to "Revenue exceeded
+    target".** "Over budget" in school finance parlance usually
+    means bad (overspent); over-collected revenue is generally good.
+    The new label removes the negative connotation.
+  * **O3 — Negative-budget guard.** The ``zero_budget_with_spend``
+    check in ``_recompute_is_over`` now uses ``<= 0`` instead of
+    ``== 0`` so a hypothetical negative budget with non-zero spend
+    correctly trips the over-budget flag. CASES21 doesn't typically
+    emit negative budgets but the defensive guard is cheap.
+
+  Tests: 280 passed (4 new pin tests for the new pills + boundaries).
+  Quality gates clean.
+
+---
+
 ## v2.4.29.0 — May 2026
 
 * **Sub-Program Budget Report — data bars now show a real axis + red
