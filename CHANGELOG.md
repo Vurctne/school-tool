@@ -5,6 +5,20 @@ is at the top.
 
 ---
 
+## v2.4.28.0 — May 2026
+
+* **Sub-Program Budget Report — Generate report writes the XLSX
+  in one click.** Pre-fix the user had to click Generate report
+  then click a separate Export to Excel button (two-step flow).
+  Now the workbook is written automatically beside the source PDF
+  as soon as the parser finishes. The Export to Excel button is
+  removed. Open output folder remains as the only secondary
+  action and works straight after Generate report. To re-write
+  the file at different threshold values, drag the sliders to
+  preview the change, then re-click Generate report.
+
+---
+
 ## v2.4.27.0 — May 2026
 
 * **Sub-Program Budget Report — asymmetric data-bar scale for

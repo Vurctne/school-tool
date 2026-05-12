@@ -652,7 +652,8 @@ class TestTwoPhasePreviewExport:
         assert tool._cached_threshold == 115.0
 
     def test_run_does_not_write_xlsx(self, tmp_path: Path) -> None:
-        """run() must not write any XLSX — _last_output_path stays None."""
+        """Round 69 — run() writes the XLSX inline and stashes
+        _last_output_path so Open output folder works straight away."""
         tool = SubProgramBudgetReportTool()
         summary = _make_summary()
         with patch("tools.sub_program.frame.logic.generate_report", return_value=summary):
@@ -660,11 +661,13 @@ class TestTwoPhasePreviewExport:
                 {"report_file": str(tmp_path / "report.pdf")},
                 _noop_progress,
             )
-        # No XLSX written; _last_output_path only set by _export_xlsx.
-        assert tool._last_output_path is None
+        # Round 69: file IS written by run; path is stashed for
+        # the Open output folder action.
+        assert tool._last_output_path is not None
 
-    def test_run_generate_report_called_with_write_xlsx_false(self, tmp_path: Path) -> None:
-        """run() must call generate_report with write_xlsx=False."""
+    def test_run_generate_report_called_with_write_xlsx_true(self, tmp_path: Path) -> None:
+        """Round 69 — run() must call generate_report with write_xlsx=True
+        so the workbook lands on disk in one step."""
         tool = SubProgramBudgetReportTool()
         summary = _make_summary()
         captured: dict[str, Any] = {}
@@ -678,10 +681,12 @@ class TestTwoPhasePreviewExport:
                 {"report_file": str(tmp_path / "report.pdf")},
                 _noop_progress,
             )
-        assert captured["write_xlsx"] is False
+        assert captured["write_xlsx"] is True
 
-    def test_run_banner_contains_preview_hint(self, tmp_path: Path) -> None:
-        """Preview mode banner must mention the Export to Excel hint."""
+    def test_run_banner_no_export_hint(self, tmp_path: Path) -> None:
+        """Round 69 — Generate report is a one-click flow now; the
+        banner should NOT prompt the user to click an Export button
+        because there is no Export button."""
         tool = SubProgramBudgetReportTool()
         summary = _make_summary()
         with patch("tools.sub_program.frame.logic.generate_report", return_value=summary):
@@ -689,7 +694,7 @@ class TestTwoPhasePreviewExport:
                 {"report_file": str(tmp_path / "report.pdf")},
                 _noop_progress,
             )
-        assert "Export to Excel" in result.banner_text
+        assert "Export to Excel" not in result.banner_text
 
     def test_preview_update_returns_new_tool_result(self, tmp_path: Path) -> None:
         """preview_update returns a ToolResult when summary is cached."""
@@ -781,89 +786,24 @@ class TestTwoPhasePreviewExport:
         result = tool.preview_update("some_other_key", 50.0)
         assert result is None
 
-    def test_export_xlsx_writes_file(self, tmp_path: Path) -> None:
-        """After run(), _export_xlsx writes the XLSX and sets _last_output_path."""
-        import sys
-        import types
-        from unittest.mock import MagicMock
+    # Round 69 — test_export_xlsx_writes_file and
+    # test_export_xlsx_without_run_shows_info deleted along with the
+    # _export_xlsx method. Generate report now writes the workbook
+    # inline; there is no longer a separate Export button to test.
 
-        tool = SubProgramBudgetReportTool()
-        lines = [_make_line("4001")]
-        out_path = tmp_path / "output.xlsx"
-        summary = _make_summary(lines=lines, output_path=out_path)
-        tool._cached_summary = summary
-        tool._cached_threshold = 101.0
-
-        # Inject a stub tkinter.messagebox so the local `import` inside
-        # _export_xlsx succeeds even when tkinter is absent (Linux CI).
-        mb_stub = types.ModuleType("tkinter.messagebox")
-        mb_stub.showinfo = MagicMock()  # type: ignore[attr-defined]
-        mb_stub.showerror = MagicMock()  # type: ignore[attr-defined]
-
-        tk_stub = sys.modules.get("tkinter")
-        existing_mb = sys.modules.get("tkinter.messagebox")
-        if tk_stub is None:
-            tk_stub = types.ModuleType("tkinter")
-            sys.modules["tkinter"] = tk_stub
-        sys.modules["tkinter.messagebox"] = mb_stub
-
-        try:
-            with patch("tools.sub_program.frame.logic._write_xlsx") as mock_write:
-                tool._export_xlsx()
-        finally:
-            if existing_mb is None:
-                sys.modules.pop("tkinter.messagebox", None)
-
-        mock_write.assert_called_once()
-        call_kwargs = mock_write.call_args
-        assert call_kwargs is not None
-        assert tool._last_output_path == out_path
-
-    def test_export_xlsx_without_run_shows_info(self) -> None:
-        """_export_xlsx without a prior run shows a messagebox and does not write."""
-        import sys
-        import types
-        from unittest.mock import MagicMock
-
-        tool = SubProgramBudgetReportTool()
-        assert tool._cached_summary is None
-
-        # Inject a stub tkinter.messagebox so the local `import` inside
-        # _export_xlsx succeeds even when tkinter is absent (Linux CI).
-        mb_stub = types.ModuleType("tkinter.messagebox")
-        mock_info = MagicMock()
-        mb_stub.showinfo = mock_info  # type: ignore[attr-defined]
-        mb_stub.showerror = MagicMock()  # type: ignore[attr-defined]
-
-        tk_stub = sys.modules.get("tkinter")
-        existing_mb = sys.modules.get("tkinter.messagebox")
-        if tk_stub is None:
-            tk_stub = types.ModuleType("tkinter")
-            sys.modules["tkinter"] = tk_stub
-        sys.modules["tkinter.messagebox"] = mb_stub
-
-        try:
-            with patch("tools.sub_program.frame.logic._write_xlsx") as mock_write:
-                tool._export_xlsx()
-        finally:
-            if existing_mb is None:
-                sys.modules.pop("tkinter.messagebox", None)
-
-        mock_write.assert_not_called()
-        mock_info.assert_called_once()
-
-    def test_secondary_actions_no_edit_commentary_button(self) -> None:
-        """Round 22a — 'Edit commentary...' button is removed.
-
-        Commentary is now edited inline by clicking any row in the
-        dashboard table (the row's ``on_row_click`` opens a small
-        single-row editor).  The bulk-modal action is gone.
+    def test_secondary_actions_has_only_open_output_folder(self) -> None:
+        """Round 22a — 'Edit commentary...' was removed (commentary is
+        now edited inline by clicking any row).
+        Round 69 — 'Export to Excel' removed too; Generate report
+        writes the workbook in one step. Open output folder is the
+        last surviving secondary action.
         """
         tool = SubProgramBudgetReportTool()
         actions = tool.secondary_actions()
         labels = [label for label, _ in actions]
-        assert labels == ["Export to Excel", "Open output folder"]
+        assert labels == ["Open output folder"]
         assert "Edit commentary..." not in labels
+        assert "Export to Excel" not in labels
 
     def test_clear_resets_cached_summary_and_threshold(self) -> None:
         """clear() must reset _cached_summary to None and _cached_threshold to 101.0."""

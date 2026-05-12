@@ -2262,10 +2262,10 @@ def _write_monthly_sub_program_sheet(
 
         # 0 maps to 1/10 of the bar width when start = -1/9 and end = 1
         # (because 0 / (1 - (-1/9)) = (1/9) / (10/9) = 1/10).
-        _DATA_BAR_NEG_START = -1.0 / 9.0  # ≈ -0.1111
+        data_bar_neg_start = -1.0 / 9.0  # ≈ -0.1111
 
         for col_letter, has_negative in (("C", has_neg_avail), ("D", has_neg_rev)):
-            start_value = _DATA_BAR_NEG_START if has_negative else 0.0
+            start_value = data_bar_neg_start if has_negative else 0.0
             ws.conditional_formatting.add(
                 f"{col_letter}3:{col_letter}{last_data_row}",
                 DataBarRule(  # type: ignore[no-untyped-call]

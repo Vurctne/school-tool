@@ -73,9 +73,10 @@ narrow the Watchlist to large overruns.
   4. Ignore amounts under ($) — dollar floor for the materiality check. \
 A variance below this amount is treated as chart-of-accounts noise and \
 stays off the Watchlist. Default $100.
-  5. Click "Generate report" then "Export to Excel". A progress bar will \
-appear while the tool runs. Do not open or modify the input files while \
-the tool is running.
+  5. Click "Generate report". A progress bar will appear while the \
+tool runs; the formatted XLSX is written automatically beside the \
+source PDF when it finishes. Do not open or modify the input files \
+while the tool is running.
   6. When complete, review the rows on the Watchlist sheet (and the \
 pink-shaded rows on the main sheet) — these are the lines that crossed \
 the threshold AND meet the dollar materiality floor.
@@ -398,8 +399,11 @@ class SubProgramBudgetReportTool:
     _commentary_overrides: dict[str, tuple[str, str, str, str]] | None = None
     _last_output_path: Path | None = None
 
-    # Two-phase preview-then-export state.
-    # Populated by run(); consumed by preview_update() and _export_xlsx().
+    # Slider-preview state. Populated by run() (which also writes
+    # the XLSX) and consumed by preview_update() to re-paint the
+    # in-app tabs when the user drags a threshold slider without
+    # re-running the parser. Round 69 removed the _export_xlsx
+    # consumer along with the secondary button.
     _cached_summary: ReportSummary | None = None
     _cached_threshold: float = 101.0  # legacy combined value (mirrors expense)
     # Round 21 — per-section thresholds.
@@ -419,7 +423,10 @@ class SubProgramBudgetReportTool:
             comments_file: Path | None = Path(raw_comments) if raw_comments else None
 
             # Auto-derive output path beside the source PDF (no file picker).
-            # Path is stashed for _export_xlsx(); not written here.
+            # Round 69 — the file IS written here as part of Generate
+            # report; pre-R69 it was a two-step flow (Generate then
+            # Export to Excel button), which added friction and meant
+            # users sometimes wondered where the file went.
             from datetime import datetime
 
             ts = datetime.now().strftime("%Y%m%d_%H%M")
@@ -461,7 +468,9 @@ class SubProgramBudgetReportTool:
                 except (TypeError, ValueError):
                     materiality_dollar = 100
 
-            # 3. Delegate to logic — parse only, no XLSX write.
+            # 3. Delegate to logic — parse + write XLSX in one step.
+            # Round 69: write_xlsx=True so Generate report is a single
+            # click instead of a two-stage Generate-then-Export flow.
             summary: ReportSummary = logic.generate_report(
                 report_file=report_file,
                 comments_file=comments_file,
@@ -471,7 +480,7 @@ class SubProgramBudgetReportTool:
                 revenue_threshold=revenue_threshold,
                 expense_threshold=expense_threshold,
                 materiality_dollar=materiality_dollar,
-                write_xlsx=False,
+                write_xlsx=True,
             )
 
             # Apply any in-memory commentary overrides from the Edit commentary
@@ -486,17 +495,21 @@ class SubProgramBudgetReportTool:
             # IDs and existing commentary to preload.
             self._last_summary = summary
 
-            # Stash for two-phase preview + export.
+            # Stash for slider preview (re-paint without re-parsing).
             self._cached_summary = summary
             self._cached_threshold = over_budget_threshold
             self._cached_revenue_threshold = revenue_threshold
             self._cached_expense_threshold = expense_threshold
             self._cached_materiality_dollar = materiality_dollar
 
-            # _last_output_path not set here — set when Export is called.
+            # Round 69: the file is already on disk, so Open output
+            # folder works straight after Generate report.
+            self._last_output_path = output_file
 
-            # 4. Build ToolResult in preview mode.
-            return self._build_result(summary, preview=True)
+            # 4. Build ToolResult — no preview suffix since the file is
+            # already written. Threshold sliders still trigger a fresh
+            # write on every change via preview_update().
+            return self._build_result(summary, preview=False)
 
         except Exception as exc:
             tb = traceback.format_exc()
@@ -583,92 +596,11 @@ class SubProgramBudgetReportTool:
 
         return self._build_result(new_summary, preview=False)
 
-    # ------------------------------------------------------------------
-    # _export_xlsx — secondary action
-    # ------------------------------------------------------------------
-
-    def _export_xlsx(self) -> None:
-        """Write the XLSX workbook using the current cached summary + threshold.
-
-        Shows a messagebox if the user clicks Export before running Generate
-        report.  Derives output path next to the source PDF (same as run()).
-
-        Round 26 — pops a yes/no/cancel dialog asking whether to include
-        the Combined sheet (Revenue + Expense aggregated per sub-program
-        with Net YTD).  Yes → all 3 sheets; No → Rev/Exp only;
-        Cancel → no export.
-        """
-        if self._cached_summary is None:
-            try:
-                import tkinter.messagebox as mb
-
-                mb.showinfo(
-                    "Export to Excel",
-                    "Run Generate report first, then click Export to Excel.",
-                )
-            except Exception:  # pragma: no cover
-                pass
-            return
-
-        summary = self._cached_summary
-        threshold = self._cached_threshold
-
-        # Round 38 — Excel output is now a single sheet matching the
-        # school's own "Monthly Sub Program Report" workbook (12 columns
-        # per sub-program).  The earlier yes/no/cancel dialog about
-        # whether to include a Combined sheet is gone — the new shape
-        # is itself the combined view, so the dialog is redundant.
-
-        # Re-derive output path (same logic as run(); uses output_path already
-        # stashed in summary from generate_report).
-        output_path = summary.output_path
-
-        try:
-            logic._write_xlsx(
-                lines=summary.lines,
-                output_file=output_path,
-                period_label=summary.period_label,
-                over_budget_threshold=threshold,
-                # Round 57 — propagate the prior-period Funds dict so
-                # the carry-forward column rolls forward across reports
-                # when the user supplied a prior-period XLSX.
-                prior_funds=summary.prior_funds,
-                # Round 62 — propagate the user's materiality slider
-                # so the XLSX Watchlist / pink-fill / auto-fill agree
-                # with the in-app Watchlist tab. Without this the
-                # writer's `materiality_dollar=100` default was used
-                # regardless of the slider setting; users tuning the
-                # "Ignore amounts under" field saw the in-app Watchlist
-                # narrow but the exported XLSX still flagged every
-                # >$100 variance.
-                materiality_dollar=self._cached_materiality_dollar,
-            )
-        except Exception as exc:
-            try:
-                import tkinter.messagebox as mb
-
-                mb.showerror(
-                    "Export to Excel",
-                    f"Export failed: {exc}",
-                )
-            except Exception:  # pragma: no cover
-                pass
-            return
-
-        self._last_output_path = output_path
-
-        # Round 39 — removed dead try/except that was a placeholder for
-        # an in-place banner update never implemented.  The mb.showinfo
-        # below is the actual success notification the user sees.
-        try:
-            import tkinter.messagebox as mb
-
-            mb.showinfo(
-                "Export to Excel",
-                f"Exported to:\n{output_path}\n\nClick Open output folder to view in Explorer.",
-            )
-        except Exception:  # pragma: no cover
-            pass
+    # Round 69 — _export_xlsx method removed. Generate report now
+    # writes the workbook in a single step (see run() above), and
+    # the secondary "Export to Excel" button is gone from
+    # secondary_actions. The file appears on disk as soon as the
+    # progress bar finishes; Open output folder works straight away.
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -743,10 +675,16 @@ class SubProgramBudgetReportTool:
             banner_level = "warning"
 
         if preview:
+            # Round 69 — preview mode is now reserved for live slider
+            # previews (preview_update); the initial Generate report
+            # call writes the file and lands in non-preview mode.
+            # The slider-tune suffix still makes sense for the live
+            # preview path; the user can re-click Generate report to
+            # re-write the file at the new threshold.
             banner_text = (
                 base_banner
                 + over_part
-                + " Drag the threshold slider to tune; click Export to Excel when done."
+                + " Drag the threshold slider to tune; re-click Generate report to re-save."
             )
         else:
             banner_text = base_banner + over_part
@@ -1144,8 +1082,10 @@ class SubProgramBudgetReportTool:
     # ------------------------------------------------------------------
 
     def secondary_actions(self) -> list[tuple[str, Callable[..., None]]]:
+        # Round 69 — "Export to Excel" removed; the workbook is now
+        # written as part of Generate report. Open output folder is
+        # the only secondary action left.
         return [
-            ("Export to Excel", self._export_xlsx),
             ("Open output folder", self._open_output_folder),
         ]
 
