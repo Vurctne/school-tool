@@ -2262,19 +2262,26 @@ def _write_monthly_sub_program_sheet(
     last_data_row = max(2, 2 + len(sub_programs))
     ws.print_area = f"A1:M{last_data_row}"
 
-    # Round 65 — green data bar on Available Balance YTD (col J)
+    # Round 65 — green data bar on Available Balance % YTD (col K)
     # gives the council reader an at-a-glance sense of how much
-    # budget remains across the page. start_type="min" /
-    # end_type="max" lets Excel auto-scale to the actual data range
-    # so the bar is meaningful regardless of the absolute dollar
-    # magnitudes. The Revenue detail sheet uses the same green bar
-    # on its % Budget received column for visual consistency.
+    # budget remains as a fraction of total expenditure budget.
+    # Percent (col K) is a stabler bar than dollar (col J) because
+    # it normalises across sub-programs of vastly different scale —
+    # a $5K Stationery row and a $580K Admin row both render as
+    # comparable bars. start_type="min" / end_type="max" lets Excel
+    # auto-scale to the actual data range. The Revenue detail sheet
+    # uses the same green bar on its % Budget received column for
+    # visual consistency. Cells that overflow into the ">999%" /
+    # "<-999%" text fallback (Round 53 cap) won't render a bar
+    # because Excel data bars only paint numeric cells — but those
+    # extreme cases carry a cell comment with the uncapped value
+    # already, so no information is lost.
     if sub_programs:
         from openpyxl.formatting.rule import DataBarRule
 
-        avail_range = f"J3:J{last_data_row}"
+        avail_pct_range = f"K3:K{last_data_row}"
         ws.conditional_formatting.add(
-            avail_range,
+            avail_pct_range,
             DataBarRule(  # type: ignore[no-untyped-call]
                 start_type="min",
                 end_type="max",

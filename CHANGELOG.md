@@ -5,6 +5,17 @@ is at the top.
 
 ---
 
+## v2.4.22.0 — May 2026
+
+* **Sub-Program Budget Report — data bar moved to Available
+  Balance % YTD column** (col K) per user correction. v2.4.21
+  placed it on col J (the dollar Available Balance). Percent is
+  a stabler bar than dollar because it normalises across sub-
+  programs of vastly different scale — a $5K Stationery row and
+  a $580K Admin row now render as comparable bars.
+
+---
+
 ## v2.4.21.0 — May 2026
 
 * **Sub-Program Budget Report — title shows the actual print date.**
