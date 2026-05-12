@@ -5,6 +5,26 @@ is at the top.
 
 ---
 
+## v2.4.27.0 — May 2026
+
+* **Sub-Program Budget Report — asymmetric data-bar scale for
+  columns with negative values.** Per user direction. The writer
+  now scans each percent column (C = Available Balance %, D =
+  Revenue Budget % Received) and adapts the bar range:
+  * **All-positive column** → range ``[0, 1.0]`` (the R65/R66
+    behaviour): 0% sits flush at the left edge, 100% at the right.
+  * **Mixed-sign column** → range ``[-1/9, 1.0]``: 0 sits at 1/10
+    from the left, the 10% slice to the left renders negatives,
+    the 90% slice to the right renders positives. Negatives below
+    -1/9 saturate against the leftmost edge but the cell text
+    still shows the true number.
+
+  On the sample PDF: column C (Available %) goes asymmetric (Admin
+  -230%, Rowing programs unbudgeted) while column D (Revenue %)
+  stays symmetric (no negative revenue lines).
+
+---
+
 ## v2.4.26.0 — May 2026
 
 * **Sub-Program Budget Report — ±999% percent cap removed.** Per

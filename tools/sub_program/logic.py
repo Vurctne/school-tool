@@ -2217,29 +2217,60 @@ def _write_monthly_sub_program_sheet(
     last_data_row = max(2, 2 + len(sub_programs))
     ws.print_area = f"A1:M{last_data_row}"
 
-    # Round 65 — green data bars on the two percent columns.
-    # Round 66: both columns moved from K/L to C/D (now positioned
-    # between PROGRAM NAME and Status). Bar range pinned to 0%–100%
-    # so the visual scale is consistent across runs: a 50% bar
-    # always means "half the budget left / half received"
-    # regardless of the maximum value in the current dataset.
-    # Auto-scale (start=min, end=max) was tried earlier but produced
-    # confusing results when one row had a wildly large percent
-    # (e.g. unbudgeted-rev programs with avail % > 500%, or revenue
-    # rows over-collecting at 2000%) — everything else collapsed to
-    # a sliver. Cells storing values outside the 0–1 range still
-    # render via Excel's data-bar clipping (negative values render
-    # no bar; >100% bars saturate at full width). Values are stored
-    # as fractions per _PERCENT_AS_PERCENT_FMT, so 100% = stored 1.0.
+    # Round 68 — asymmetric data-bar range when the column contains
+    # at least one negative value.
+    #
+    # All-positive column: range is [0, 1.0] → 0% sits flush at the
+    # left edge, 100% at the right (the existing R65/R66 behaviour).
+    #
+    # Mixed-sign column: range is [-1/9, 1.0] → 0 sits at 1/10 from
+    # the left. The 10% slice to the left of zero hosts negative
+    # values (anything below -1/9 saturates against the leftmost
+    # edge); the 90% slice to the right hosts positives 0–100% (and
+    # >100% saturates at full width). This intentionally squeezes
+    # negatives 9× so the common positive range stays legible while
+    # any deficit is still visually obvious.
+    #
+    # Round 65 history: pre-R65 tried auto-scale (min..max) but a
+    # 2,021% over-collection or a 500% unbudgeted-rev outlier
+    # squashed every normal row to a sliver. Pinned ranges (R65
+    # onwards) give a stable visual scale across runs.
     if sub_programs:
         from openpyxl.formatting.rule import DataBarRule
 
-        for col_letter in ("C", "D"):
+        # Available Balance % = (Annual Exp Budget − Exp YTD − Orders) ÷ Annual Exp Budget
+        has_neg_avail = False
+        for sp in sub_programs:
+            eb = exp_b.get(sp, Decimal("0"))
+            if eb <= 0:
+                continue
+            ey = exp_y.get(sp, Decimal("0"))
+            oo = orders.get(sp, Decimal("0"))
+            if (eb - ey - oo) < 0:
+                has_neg_avail = True
+                break
+
+        # Revenue Budget % Received = Revenue YTD ÷ Annual Rev Budget
+        has_neg_rev = False
+        for sp in sub_programs:
+            rb = rev_b.get(sp, Decimal("0"))
+            if rb <= 0:
+                continue
+            if rev_y.get(sp, Decimal("0")) < 0:
+                has_neg_rev = True
+                break
+
+        # 0 maps to 1/10 of the bar width when start = -1/9 and end = 1
+        # (because 0 / (1 - (-1/9)) = (1/9) / (10/9) = 1/10).
+        _DATA_BAR_NEG_START = -1.0 / 9.0  # ≈ -0.1111
+
+        for col_letter, has_negative in (("C", has_neg_avail), ("D", has_neg_rev)):
+            start_value = _DATA_BAR_NEG_START if has_negative else 0.0
             ws.conditional_formatting.add(
                 f"{col_letter}3:{col_letter}{last_data_row}",
                 DataBarRule(  # type: ignore[no-untyped-call]
                     start_type="num",
-                    start_value=0,
+                    start_value=start_value,
                     end_type="num",
                     end_value=1,  # 1.0 = 100% (cells store fractions)
                     color=_DATA_BAR_COLOR,

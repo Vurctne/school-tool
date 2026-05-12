@@ -2844,6 +2844,59 @@ class TestF2XlsxLayout:
         ws = wb["Sub Program Report"]
         assert ws.cell(row=3, column=5).value == "On track"
 
+    def test_data_bar_uses_symmetric_range_when_all_positive(self, tmp_path: Path) -> None:
+        """Round 68: an all-positive column gets the standard
+        [0, 1.0] range — 0% sits flush left, 100% at the right."""
+        out = tmp_path / "all_positive.xlsx"
+        # Both rows have positive avail (eb > ey + oo) and positive rev.
+        rev = self._line("4001", "Revenue", "10000", "8000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Sub Program Report"]
+        # rng.sqref renders single-cell ranges as e.g. "C3"
+        # rather than "C3:C3", so we key by the leading column letter.
+        ranges: dict[str, tuple[float, float]] = {}
+        for rng, rules in ws.conditional_formatting._cf_rules.items():  # type: ignore[attr-defined]
+            for rule in rules:
+                if rule.type == "dataBar":
+                    cfvo = rule.dataBar.cfvo
+                    ranges[str(rng.sqref)[0]] = (
+                        float(cfvo[0].val),
+                        float(cfvo[1].val),
+                    )
+        # Both C (avail %) and D (rev %) have positive-only data.
+        assert ranges["C"] == (0.0, 1.0)
+        assert ranges["D"] == (0.0, 1.0)
+
+    def test_data_bar_uses_asymmetric_range_when_negative_avail(self, tmp_path: Path) -> None:
+        """Round 68: when the Available Balance % column has any
+        negative value (over-spent + over-ordered), start = -1/9 so
+        0 sits at 1/10 from the left; the negative-side 10% slice
+        renders deficits."""
+        out = tmp_path / "neg_avail.xlsx"
+        # 7001-like: $100K budget, $300K spent → avail % = -200%.
+        rev = self._line("7001", "Revenue", "10000", "5000")
+        exp = self._line("7001", "Expenditure", "100000", "300000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out)
+        ws = wb["Sub Program Report"]
+        ranges: dict[str, tuple[float, float]] = {}
+        for rng, rules in ws.conditional_formatting._cf_rules.items():  # type: ignore[attr-defined]
+            for rule in rules:
+                if rule.type == "dataBar":
+                    cfvo = rule.dataBar.cfvo
+                    ranges[str(rng.sqref)[0]] = (
+                        float(cfvo[0].val),
+                        float(cfvo[1].val),
+                    )
+        # C (avail %) sees a negative → asymmetric range.
+        c_start, c_end = ranges["C"]
+        assert c_start == pytest.approx(-1.0 / 9.0)
+        assert c_end == 1.0
+        # D (rev %) is still all positive → symmetric.
+        assert ranges["D"] == (0.0, 1.0)
+
 
 class TestF2WatchlistSheet:
     """The Watchlist sheet: filtered subset where Status != On track."""
