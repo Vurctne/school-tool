@@ -1762,6 +1762,25 @@ def _write_xlsx(
         expense_threshold=expense_threshold,
     )
 
+    # Round 64 — restored the legacy Revenue + Expenditure detail
+    # sheets per user request. Round 38 collapsed both into the single
+    # "Sub Program Report" tab, but a user who wants to drill into a
+    # specific account section (e.g. "all revenue lines in one place
+    # for an auditor's read") was left without that view. The two
+    # sheets carry the per-Account-row data with the green % data bar
+    # and pink-fill for over-budget rows, matching the Jan26 reference
+    # workbook's shape exactly.
+    revenue_lines = [ln for ln in lines if ln.account.lower().startswith("revenue")]
+    if revenue_lines:
+        rev_ws = wb.create_sheet("Revenue")
+        rev_title = _sheet_title("Annual Sub-Program Budget Report", period_label, "Revenue")
+        _write_sheet(rev_ws, rev_title, _REV_HEADERS, _REV_WIDTHS, revenue_lines, is_revenue=True)
+    expense_lines = [ln for ln in lines if ln.account.lower().startswith("expenditure")]
+    if expense_lines:
+        exp_ws = wb.create_sheet("Expenditure")
+        exp_title = _sheet_title("Annual Sub-Program Budget Report", period_label, "Expenditure")
+        _write_sheet(exp_ws, exp_title, _EXP_HEADERS, _EXP_WIDTHS, expense_lines, is_revenue=False)
+
     # R1 fix: pin the main sheet as active so Excel opens to it by
     # default. Without this, openpyxl may surface Watchlist first
     # (which is sorted/filtered and looks like a partial export).

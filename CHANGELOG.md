@@ -5,6 +5,33 @@ is at the top.
 
 ---
 
+## v2.4.20.0 — May 2026
+
+* **Sub-Program Budget Report — XLSX restored to 4 sheets.** The
+  exported workbook now ships with ``Sub Program Report`` (the
+  combined Status/financials view, default active sheet),
+  ``Watchlist`` (filtered subset for council attention), plus the
+  legacy ``Revenue`` and ``Expenditure`` detail sheets. Round 38
+  had collapsed both detail sheets into the combined view, but a
+  user wanting to drill into "all Revenue lines for an auditor's
+  read" or "every Expenditure account-row with its data bar" was
+  left without that view. The detail sheets carry the same per-
+  Account-row shape as the pre-Round-38 export (Last year actual /
+  Last year budget / Annual budget / YTD / % Budget [received|
+  Expended] / Uncommitted / Comments), with the green % data bar
+  and pink-fill for over-budget rows.
+* **Sub-Program Budget Report — new Preview tab in the in-app view.**
+  A 4th tab "Preview" appears after Expense, showing the per-sub-
+  program aggregated view that mirrors the XLSX Sub Program Report
+  sheet's 13-column layout (CODE, Program name, Status, Funds prev.
+  yrs, Budget Rev, Budget Exp, Rev YTD, Exp YTD, Orders, Avail Bal
+  YTD, Avail %, Rev %, Comments). Users can see exactly what the
+  export will look like without opening Excel. Pink-fill matches
+  the XLSX exactly via the same is_over+is_material aggregation
+  the Watchlist uses.
+
+---
+
 ## v2.4.19.0 — May 2026
 
 * **Sub-Program Budget Report — in-app + XLSX Watchlist sort orders

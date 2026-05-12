@@ -155,6 +155,29 @@ _WATCHLIST_COLUMNS: list[dict[str, Any]] = [
 # Round 56 — _PACING_WATCH_THRESHOLD constant dropped (no pacing).
 
 
+# Round 64 — Preview tab columns. Mirrors the XLSX "Sub Program Report"
+# sheet (13 cols) so the user can see what the export will look like
+# without opening Excel. One row per sub-program, both Revenue and
+# Expenditure aggregated. Layout parallels the writer's column order:
+# CODE, NAME, Status, Funds, Budget Rev, Budget Exp, Rev YTD, Exp YTD,
+# Orders, Available Balance YTD, Avail %, Rev %, Comments.
+_PREVIEW_COLUMNS: list[dict[str, Any]] = [
+    {"key": "code", "label": "CODE", "width": 60, "mono": True},
+    {"key": "name", "label": "Program name"},
+    {"key": "status", "label": "Status", "width": 130, "mono": False},
+    {"key": "funds", "label": "Funds prev. yrs", "width": 100, "align": "right", "mono": True},
+    {"key": "budget_rev", "label": "Budget Rev", "width": 100, "align": "right", "mono": True},
+    {"key": "budget_exp", "label": "Budget Exp", "width": 100, "align": "right", "mono": True},
+    {"key": "rev_ytd", "label": "Rev YTD", "width": 100, "align": "right", "mono": True},
+    {"key": "exp_ytd", "label": "Exp YTD", "width": 100, "align": "right", "mono": True},
+    {"key": "orders", "label": "Orders", "width": 100, "align": "right", "mono": True},
+    {"key": "avail", "label": "Avail Bal YTD", "width": 110, "align": "right", "mono": True},
+    {"key": "avail_pct", "label": "Avail %", "width": 70, "align": "right", "mono": True},
+    {"key": "rev_pct", "label": "Rev %", "width": 70, "align": "right", "mono": True},
+    {"key": "comments", "label": "Comments", "width": 180},
+]
+
+
 def _watchlist_why(line: Any) -> str:
     """Return the short trigger label for a watchlist row.
 
@@ -215,6 +238,22 @@ _COMBINED_COLUMNS: list[dict[str, Any]] = [
 def _fmt_dollar(value: Decimal) -> str:
     """Format a Decimal as a dollar string with two decimal places."""
     return f"${value:,.2f}"
+
+
+def _fmt_dollar_short(value: Decimal) -> str:
+    """Round 64 — compact dollar format for the Preview tab.
+
+    Matches the XLSX ``_ACCOUNTING_FMT`` integer renderings: zero
+    renders as a centred dash so an all-zero column doesn't read as
+    a wall of "$0" noise; negative values prefix the U+2212 minus
+    sign. The Preview tab packs 13 columns into the visible area so
+    each numeric cell needs to be terse.
+    """
+    if value == 0:
+        return "—"
+    if value < 0:
+        return f"{_MINUS}${(-value):,.0f}"
+    return f"${value:,.0f}"
 
 
 def _fmt_pct(value: Decimal) -> str:
@@ -875,6 +914,18 @@ class SubProgramBudgetReportTool:
                 }
             return {}
 
+        # Round 64 — Preview tab uses a simpler row-style that ONLY
+        # paints pink for sub-programs on the Watchlist (matches the
+        # XLSX pink-fill condition exactly: see logic.py's
+        # ``sps_on_watchlist`` set, which fires when any line of the
+        # sub-program is is_over+is_material). Preview rows are per-
+        # sub-program (not per-line) so the row's _on_watchlist flag
+        # is set by the build step rather than re-derived here.
+        def _preview_row_style(row: dict[str, Any]) -> dict[str, Any]:
+            if bool(row.get("_on_watchlist")):
+                return {"background": _OVER_BG, "foreground": tokens.DANGER_FG}
+            return {}
+
         # Round 22a — clicking a data row pops a small inline editor for
         # that line's commentary.  Comment sub-rows are skipped (clicks
         # roll up to their parent in a later iteration if needed).
@@ -987,6 +1038,17 @@ class SubProgramBudgetReportTool:
         n_expense = sum(1 for ln in summary.lines if ln.account.lower().startswith("expenditure"))
         revenue_label = f"Revenue ({n_revenue})"
         expense_label = f"Expense ({n_expense})"
+
+        # ------------------------------------------------------------------
+        # Round 64 — Preview tab: per-sub-program aggregated view that
+        # mirrors the XLSX Sub Program Report sheet layout, so the
+        # user can see exactly what the export will look like without
+        # opening Excel. Aggregates Revenue + Expenditure account-rows
+        # of the same sub-program into one row, matching the writer's
+        # per-sub-program shape.
+        preview_rows = self._build_preview_rows(summary)
+        preview_label = f"Preview ({len(preview_rows)})"
+
         # Round 55 UI simplification: Summary tab (Round 49) and Bridge
         # tab (Round 50) dropped per user direction. Status pill (col 3)
         # + Trend column (col 4) now carry the "what should I look at"
@@ -994,7 +1056,9 @@ class SubProgramBudgetReportTool:
         # Bridge waterfall is similarly visualised at the school-net
         # level via the OUTPUT XLSX's Sub Program Report sheet.
         # Watchlist is now the default (index 0); Revenue / Expense
-        # remain as detail tabs.
+        # remain as detail tabs. Round 64 added Preview as the
+        # rightmost tab — surfaces the per-sub-program aggregated
+        # view (the XLSX export layout) without having to open Excel.
         table_tabs: list[tuple[str, TableSpec]] = [
             (
                 watchlist_label,
@@ -1020,6 +1084,15 @@ class SubProgramBudgetReportTool:
                     columns=_TABLE_COLUMNS,
                     rows=expense_rows,
                     row_style=_row_style,
+                    on_row_click=_on_row_click,
+                ),
+            ),
+            (
+                preview_label,
+                TableSpec(
+                    columns=_PREVIEW_COLUMNS,
+                    rows=preview_rows,
+                    row_style=_preview_row_style,
                     on_row_click=_on_row_click,
                 ),
             ),
@@ -1093,6 +1166,120 @@ class SubProgramBudgetReportTool:
             return
 
         open_output_folder(self._last_output_path)
+
+    def _build_preview_rows(self, summary: ReportSummary) -> list[dict[str, Any]]:
+        """Round 64 — build the per-sub-program Preview rows.
+
+        Aggregates Revenue + Expenditure account-rows of the same
+        sub-program into one row, mirroring the XLSX Sub Program
+        Report sheet's layout (one row per sub-program with Status
+        pill + Revenue / Expenditure totals + Outstanding orders +
+        derived Available Balance YTD + percent columns + Comments).
+
+        Sub-programs whose Status pill is non-OK OR whose lines are
+        on the Watchlist set the ``_on_watchlist`` flag so the
+        ``_preview_row_style`` function paints them pink — same
+        condition as the XLSX pink fill.
+        """
+        from tools.sub_program.logic import compute_status_pill, render_commentary_prose
+
+        # Aggregate per sub-program.
+        rev_b: dict[str, Decimal] = {}
+        rev_y: dict[str, Decimal] = {}
+        exp_b: dict[str, Decimal] = {}
+        exp_y: dict[str, Decimal] = {}
+        orders: dict[str, Decimal] = {}
+        desc: dict[str, str] = {}
+        commentary: dict[str, tuple[str, str, str, str]] = {}
+        sps_on_watchlist: set[str] = set()
+        materiality = summary.materiality_dollar if summary.materiality_dollar else 100
+        mat_dec = Decimal(str(materiality))
+        for ln in summary.lines:
+            sp = ln.sub_program
+            kind = ln.account.lower()
+            if kind.startswith("revenue"):
+                rev_b[sp] = rev_b.get(sp, Decimal("0")) + ln.budget
+                rev_y[sp] = rev_y.get(sp, Decimal("0")) + ln.ytd
+            elif kind.startswith("expenditure"):
+                exp_b[sp] = exp_b.get(sp, Decimal("0")) + ln.budget
+                exp_y[sp] = exp_y.get(sp, Decimal("0")) + ln.ytd
+                if ln.outstanding_orders:
+                    orders[sp] = orders.get(sp, Decimal("0")) + ln.outstanding_orders
+            if ln.description and sp not in desc:
+                desc[sp] = ln.description
+            if sp not in commentary and (
+                ln.commentary
+                or ln.commentary_driver
+                or ln.commentary_outlook
+                or ln.commentary_action
+            ):
+                commentary[sp] = (
+                    ln.commentary,
+                    ln.commentary_driver,
+                    ln.commentary_outlook,
+                    ln.commentary_action,
+                )
+            # Match the XLSX writer's per-line is_over+is_material
+            # aggregation so the Preview tab's pink fill agrees with
+            # the XLSX pink fill exactly.
+            is_material_now = abs(ln.ytd - ln.budget) >= mat_dec
+            if ln.is_over and is_material_now:
+                sps_on_watchlist.add(sp)
+
+        sub_programs = sorted(set(rev_b) | set(exp_b))
+        funds = summary.prior_funds or {}
+        rev_th = summary.revenue_threshold or 101.0
+        exp_th = summary.expense_threshold or 101.0
+
+        rows: list[dict[str, Any]] = []
+        for sp in sub_programs:
+            rb = rev_b.get(sp, Decimal("0"))
+            ry = rev_y.get(sp, Decimal("0"))
+            eb = exp_b.get(sp, Decimal("0"))
+            ey = exp_y.get(sp, Decimal("0"))
+            oo = orders.get(sp, Decimal("0"))
+            f = funds.get(sp, Decimal("0"))
+            avail = f + ry - ey - oo
+            avail_pct = (avail / eb) if eb != 0 else Decimal("0")
+            rev_pct = (ry / rb) if rb != 0 else Decimal("0")
+            status = compute_status_pill(
+                annual_exp_budget=eb,
+                exp_ytd=ey,
+                annual_rev_budget=rb,
+                rev_ytd=ry,
+                revenue_threshold=float(rev_th),
+                expense_threshold=float(exp_th),
+                materiality_dollar=int(materiality),
+            )
+            c_notes, c_driver, c_outlook, c_action = commentary.get(sp, ("", "", "", ""))
+            comments_text = render_commentary_prose(
+                notes=c_notes,
+                driver=c_driver,
+                outlook=c_outlook,
+                action=c_action,
+            )
+            rows.append(
+                {
+                    "code": sp,
+                    "name": desc.get(sp, ""),
+                    "status": status,
+                    "funds": _fmt_dollar_short(f),
+                    "budget_rev": _fmt_dollar_short(rb),
+                    "budget_exp": _fmt_dollar_short(eb),
+                    "rev_ytd": _fmt_dollar_short(ry),
+                    "exp_ytd": _fmt_dollar_short(ey),
+                    "orders": _fmt_dollar_short(oo),
+                    "avail": _fmt_dollar_short(avail),
+                    "avail_pct": f"{float(avail_pct) * 100:.1f}%" if eb else "",
+                    "rev_pct": f"{float(rev_pct) * 100:.1f}%" if rb else "",
+                    "comments": comments_text,
+                    "sub_program": sp,
+                    "description": desc.get(sp, ""),
+                    "_on_watchlist": sp in sps_on_watchlist,
+                    "_is_comment_row": False,
+                }
+            )
+        return rows
 
     def _open_inline_comment_editor(self, row: dict[str, Any]) -> None:
         """Round 22a / Round 51 Phase D — inline comment editor.

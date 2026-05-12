@@ -772,7 +772,16 @@ class TestXlsxMonthlyReport:
     Program Report workbook. Round 54 F2 added a second sheet
     (Watchlist) so the workbook is two sheets total."""
 
-    def test_workbook_has_sub_program_report_and_watchlist_sheets(self, tmp_path: Path) -> None:
+    def test_workbook_has_expected_sheets(self, tmp_path: Path) -> None:
+        """Round 64 — restored the legacy Revenue + Expenditure detail
+        sheets per user request. Pre-R64 only the Sub Program Report
+        + Watchlist sheets shipped; Round 38 had collapsed Revenue +
+        Expenditure into the combined sheet. Now both views coexist.
+
+        With a single Expenditure line, only the Expenditure detail
+        sheet is created — Revenue is skipped because there's no
+        revenue line to populate it.
+        """
         from tools.sub_program.logic import SubProgramLine
 
         out = tmp_path / "test.xlsx"
@@ -789,8 +798,48 @@ class TestXlsxMonthlyReport:
         )
         _write_xlsx([ln], out)
         wb = openpyxl.load_workbook(out)
-        # F2: Sub Program Report (main) + Watchlist (filtered subset).
-        assert wb.sheetnames == ["Sub Program Report", "Watchlist"]
+        assert wb.sheetnames == [
+            "Sub Program Report",
+            "Watchlist",
+            "Expenditure",
+        ]
+
+    def test_workbook_has_both_detail_sheets_when_both_sides_present(self, tmp_path: Path) -> None:
+        """Round 64 — when both Revenue + Expenditure lines are present
+        the workbook ships all 4 sheets."""
+        from tools.sub_program.logic import SubProgramLine
+
+        out = tmp_path / "test.xlsx"
+        rev = SubProgramLine(
+            sub_program="4101",
+            account="Revenue",
+            description="English",
+            budget=Decimal("500"),
+            ytd=Decimal("100"),
+            remaining=Decimal("400"),
+            used_pct=Decimal("20"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        exp = SubProgramLine(
+            sub_program="4101",
+            account="Expenditure",
+            description="English",
+            budget=Decimal("1000"),
+            ytd=Decimal("400"),
+            remaining=Decimal("600"),
+            used_pct=Decimal("40"),
+            faculty="Curriculum",
+            is_over=False,
+        )
+        _write_xlsx([rev, exp], out)
+        wb = openpyxl.load_workbook(out)
+        assert wb.sheetnames == [
+            "Sub Program Report",
+            "Watchlist",
+            "Revenue",
+            "Expenditure",
+        ]
 
 
 class TestPeriodLabel:

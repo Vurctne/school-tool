@@ -1130,10 +1130,12 @@ class TestRound22bViewTabs:
             is_over=False,
         )
 
-    def test_result_has_three_tabs(self) -> None:
-        """Round 55 UI simplification — Summary tab (Round 49) and
-        Bridge tab (Round 50) dropped. Watchlist is now index 0
-        (default landing), Revenue index 1, Expense index 2."""
+    def test_result_has_four_tabs(self) -> None:
+        """Round 64 — Preview tab added at index 3 showing the XLSX
+        Sub Program Report layout. Watchlist=0, Revenue=1, Expense=2,
+        Preview=3. Pre-R64 there were 3 tabs (Round 55 simplification
+        dropped Summary + Bridge).
+        """
         tool = SubProgramBudgetReportTool()
         lines = [
             self._line("1251", "Revenue", "1000"),
@@ -1143,16 +1145,54 @@ class TestRound22bViewTabs:
         result = tool._build_result(summary, preview=False)
 
         assert result.table_tabs is not None
-        assert len(result.table_tabs) == 3
+        assert len(result.table_tabs) == 4
 
         labels = [label for label, _ in result.table_tabs]
         assert "Watchlist" in labels[0]  # default landing
         assert "Revenue" in labels[1]
         assert "Expense" in labels[2]
+        assert "Preview" in labels[3]
         # Summary and Bridge no longer in any tab label.
         for lbl in labels:
             assert "Summary" not in lbl
             assert "Bridge" not in lbl
+
+    def test_preview_tab_has_xlsx_layout(self) -> None:
+        """Round 64 — Preview tab columns match the XLSX Sub Program
+        Report sheet: CODE, Program name, Status, Funds, Budget Rev,
+        Budget Exp, Rev YTD, Exp YTD, Orders, Avail Bal YTD, Avail %,
+        Rev %, Comments (13 columns)."""
+        tool = SubProgramBudgetReportTool()
+        lines = [
+            self._line("1251", "Revenue", "1000"),
+            self._line("4001", "Expenditure", "5000"),
+        ]
+        summary = _make_summary(lines=lines)
+        result = tool._build_result(summary, preview=False)
+
+        assert result.table_tabs is not None
+        preview_label, preview_spec = result.table_tabs[3]
+        assert "Preview" in preview_label
+        col_keys = [c["key"] for c in preview_spec.columns]
+        assert col_keys == [
+            "code",
+            "name",
+            "status",
+            "funds",
+            "budget_rev",
+            "budget_exp",
+            "rev_ytd",
+            "exp_ytd",
+            "orders",
+            "avail",
+            "avail_pct",
+            "rev_pct",
+            "comments",
+        ]
+        # One row per sub-program (1251 + 4001 = 2 rows).
+        assert len(preview_spec.rows) == 2
+        codes = sorted(r["code"] for r in preview_spec.rows)
+        assert codes == ["1251", "4001"]
 
     def test_revenue_tab_only_revenue_rows(self) -> None:
         tool = SubProgramBudgetReportTool()
