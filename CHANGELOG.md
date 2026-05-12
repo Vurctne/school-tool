@@ -5,6 +5,20 @@ is at the top.
 
 ---
 
+## v2.4.23.0 — May 2026
+
+* **Sub-Program Budget Report — data bar range pinned to 0%–100%.**
+  v2.4.22 used auto-scale (min..max), which collapsed normal rows
+  to a sliver whenever the dataset had a high-percent outlier (e.g.
+  an unbudgeted-revenue program with > 500% avail %). Pinning the
+  bar to a fixed 0–100% range gives a consistent visual scale: a
+  50% bar always reads as "half the budget left" regardless of any
+  outlier in the same column. Out-of-range values are still
+  rendered (negatives produce no bar; > 100% saturates at full
+  width) per Excel's standard data-bar clipping.
+
+---
+
 ## v2.4.22.0 — May 2026
 
 * **Sub-Program Budget Report — data bar moved to Available

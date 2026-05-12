@@ -2262,20 +2262,18 @@ def _write_monthly_sub_program_sheet(
     last_data_row = max(2, 2 + len(sub_programs))
     ws.print_area = f"A1:M{last_data_row}"
 
-    # Round 65 — green data bar on Available Balance % YTD (col K)
-    # gives the council reader an at-a-glance sense of how much
-    # budget remains as a fraction of total expenditure budget.
-    # Percent (col K) is a stabler bar than dollar (col J) because
-    # it normalises across sub-programs of vastly different scale —
-    # a $5K Stationery row and a $580K Admin row both render as
-    # comparable bars. start_type="min" / end_type="max" lets Excel
-    # auto-scale to the actual data range. The Revenue detail sheet
-    # uses the same green bar on its % Budget received column for
-    # visual consistency. Cells that overflow into the ">999%" /
-    # "<-999%" text fallback (Round 53 cap) won't render a bar
-    # because Excel data bars only paint numeric cells — but those
-    # extreme cases carry a cell comment with the uncapped value
-    # already, so no information is lost.
+    # Round 65 — green data bar on Available Balance % YTD (col K).
+    # Bar range pinned to 0%–100% so the visual scale is consistent
+    # across runs: a 50% remaining bar always means "half the budget
+    # left" regardless of the maximum value in the current dataset.
+    # Auto-scale (start=min, end=max) was tried earlier but produced
+    # confusing results when one row had a wildly large remaining
+    # percent (e.g. unbudgeted-rev programs with avail % > 500%) —
+    # everything else collapsed to a sliver. Cells storing values
+    # outside the 0–1 range still render via Excel's data-bar
+    # clipping (negative values render no bar; >100% bars saturate
+    # at full width). Values are stored as fractions per
+    # _PERCENT_AS_PERCENT_FMT, so 100% = stored 1.0.
     if sub_programs:
         from openpyxl.formatting.rule import DataBarRule
 
@@ -2283,8 +2281,10 @@ def _write_monthly_sub_program_sheet(
         ws.conditional_formatting.add(
             avail_pct_range,
             DataBarRule(  # type: ignore[no-untyped-call]
-                start_type="min",
-                end_type="max",
+                start_type="num",
+                start_value=0,
+                end_type="num",
+                end_value=1,  # 1.0 = 100% (cells store fractions)
                 color=_DATA_BAR_COLOR,
                 showValue=True,
             ),
