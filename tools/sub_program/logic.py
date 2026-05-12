@@ -525,34 +525,12 @@ def render_commentary_prose(
     return " ".join(sentences)
 
 
-# ---------------------------------------------------------------------------
-# Round 53 F1 — Percent display cap (Move F)
-# ---------------------------------------------------------------------------
-# Some sub-programs produce percent values that read as nonsense to a
-# non-finance reader (the actual KMAR file has rev_y / rev_b = 21.36 =
-# "2,136% revenue received" for sub-program 4400 Mathematics). We cap
-# the displayed value at ±999% (= ±9.99 stored, since the cell number
-# format is ``0.0%``) and attach a cell comment carrying the uncapped
-# value so investigators still see the truth.
-
-_PERCENT_CAP = Decimal("9.99")
-
-
-def cap_percent_for_display(pct: Decimal | float | int | None) -> Decimal | None:
-    """Cap an unbounded percent (stored as a fraction, e.g. 0.65 =
-    65%) at ±999% for display.
-
-    Returns ``None`` for ``None`` input. Otherwise returns a Decimal
-    in the closed range ``[-9.99, 9.99]``.
-    """
-    if pct is None:
-        return None
-    p = Decimal(str(pct))
-    if p > _PERCENT_CAP:
-        return _PERCENT_CAP
-    if p < -_PERCENT_CAP:
-        return -_PERCENT_CAP
-    return p
+# Round 67 — ``cap_percent_for_display`` deleted along with the
+# ``_PERCENT_CAP`` constant. The Round 53 F1 (Move F) ±999% cap was
+# dropped per user feedback that the ">999%" / "<-999%" text markers
+# hid the actual magnitude. Percent cells now always render the
+# Excel formula; the data bar (col C/D, 0–100% pinned) saturates
+# visually for extreme values while the number text shows the truth.
 
 
 # Round 62 — Trend column functions deleted. The Trend feature
@@ -1832,10 +1810,12 @@ def _write_monthly_sub_program_sheet(
     Round 57: the three derived numeric columns (Available Balance YTD,
     Available Balance %, Revenue Budget % Received) are written as
     Excel formulas so a school auditor can see HOW each number is
-    derived. The percentage cells fall back to a text marker
-    (``>999%`` / ``<-999%``) when the result would exceed the cap;
-    in that case a comment carries the uncapped value for screen
-    readers.
+    derived. Round 67 dropped the ±999% display cap — the actual
+    percentage renders, however large, so a 2,021% revenue over-
+    collection reads as "2021.3%" instead of being collapsed to
+    ">999%". The 0–100% data bar still caps visually at 100% via
+    Excel's standard clipping, so the bar + number together convey
+    "extreme over-collection, scale 2,021%" at a glance.
 
     Rows whose Status pill is non-OK get the pink ``_OVER_FILL``
     (HL_MISMATCH) across all 13 cells — the canonical "needs
@@ -2099,63 +2079,34 @@ def _write_monthly_sub_program_sheet(
         avail_cell = ws.cell(row=row_idx, column=12, value=avail_formula)
         avail_cell.number_format = _ACCOUNTING_FMT
 
-        # Round 57 — Available Balance % YTD (col 3/C, Round 66 moved
-        # from K) and Revenue Budget % Received YTD (col 4/D, Round 66
-        # moved from L) as Excel formulas with display-cap fallback.
-        # Round 53 F1 (Move F) — cap unbounded percents at ±999% for
-        # display so a non-finance reader sees a finite number. When
-        # the computed value exceeds the cap, write a text marker
-        # (``>999%`` / ``<-999%``) instead of the formula; an attached
-        # cell comment carries the uncapped value.
-        from openpyxl.comments import Comment
-
-        def _write_capped_percent_or_formula(
+        # Round 67 — always write the Excel formula and let Excel
+        # display the actual percentage, however large. Pre-R67 the
+        # writer capped values outside ±999% to text markers
+        # (">999%" / "<-999%") with a cell comment carrying the real
+        # number — a 2,021% revenue over-collection rendered as
+        # ">999%" which (per user feedback on D27) hid the actual
+        # magnitude. The data bar (col C / col D, R65/R66) already
+        # caps visually at 100% via Excel's standard clipping, so a
+        # raw "2021.3%" number alongside a saturated bar gives the
+        # full information.
+        def _write_percent_formula(
             r: int,
             cell_col: int,
             raw_pct: Decimal | None,
             formula: str,
-            label: str,
         ) -> None:
-            cell = ws.cell(row=r, column=cell_col)
             if raw_pct is None:
                 # Divisor is zero — leave blank rather than #DIV/0!.
                 return
-            capped = cap_percent_for_display(raw_pct)
-            assert capped is not None
-            if capped != raw_pct:
-                # Out of range — fall back to a text marker so the cap
-                # is visible on print. The formula would compute the
-                # uncapped value if we used it, breaking the cap.
-                marker = ">999%" if raw_pct > 0 else "<-999%"
-                cell.value = marker
-                cell.number_format = "@"
-                cell.comment = Comment(
-                    f"Capped from {float(raw_pct) * 100:.1f}% for display ({label}).",
-                    "School Tool",
-                )
-            else:
-                # In range — write the formula so the user can audit it.
-                cell.value = formula
-                cell.number_format = _PERCENT_AS_PERCENT_FMT
+            cell = ws.cell(row=r, column=cell_col, value=formula)
+            cell.number_format = _PERCENT_AS_PERCENT_FMT
 
         avail_pct: Decimal | None = available / eb if eb != 0 else None
         rev_pct: Decimal | None = ry / rb if rb != 0 else None
         # Available Balance % formula: =L{r}/H{r}  (Avail YTD ÷ Budget Exp)
-        _write_capped_percent_or_formula(
-            row_idx,
-            3,
-            avail_pct,
-            f"=L{row_idx}/H{row_idx}",
-            "Available Balance %",
-        )
+        _write_percent_formula(row_idx, 3, avail_pct, f"=L{row_idx}/H{row_idx}")
         # Revenue Budget % Received formula: =I{r}/G{r}  (Rev YTD ÷ Budget Rev)
-        _write_capped_percent_or_formula(
-            row_idx,
-            4,
-            rev_pct,
-            f"=I{row_idx}/G{row_idx}",
-            "Revenue % Received",
-        )
+        _write_percent_formula(row_idx, 4, rev_pct, f"=I{row_idx}/G{row_idx}")
 
         # Round 53 F1 (Move B) — Status pill at col 5 (was col 3
         # pre-R66; the two percent columns moved before it). Round 56:

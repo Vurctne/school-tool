@@ -5,6 +5,24 @@ is at the top.
 
 ---
 
+## v2.4.26.0 — May 2026
+
+* **Sub-Program Budget Report — ±999% percent cap removed.** Per
+  user direction. Pre-fix the writer capped percent cells outside
+  ±999% to text markers (``">999%"`` / ``"<-999%"``) with a cell
+  comment carrying the real number. A 2021% over-collection on
+  D27 (4400 Mathematics) rendered as ``">999%"``, which hid the
+  actual magnitude. Now the writer always emits the Excel formula
+  and the cell displays the true percentage. The data bar (col
+  C/D, 0–100% pinned) still saturates visually at 100% for extreme
+  values, so the bar + number together convey "scale of the
+  extreme overage" at a glance.
+
+  Dead code removed: ``cap_percent_for_display()`` function +
+  ``_PERCENT_CAP`` constant + 8 ``TestPercentCap`` tests.
+
+---
+
 ## v2.4.25.0 — May 2026
 
 * **Sub-Program Budget Report — column re-order.** The two percent

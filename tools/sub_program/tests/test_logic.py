@@ -1920,51 +1920,10 @@ class TestCommentaryProse:
         assert render_commentary_prose(driver="FooBar", notes="some note") == "Some note."
 
 
-class TestPercentCap:
-    """``cap_percent_for_display`` clamps unbounded percents to ±999%
-    so a council reader sees a finite number."""
-
-    def test_none_passes_through(self) -> None:
-        from tools.sub_program.logic import cap_percent_for_display
-
-        assert cap_percent_for_display(None) is None
-
-    def test_value_within_range_unchanged(self) -> None:
-        from tools.sub_program.logic import cap_percent_for_display
-
-        # 0.65 stored = 65% rendered — well within range
-        assert cap_percent_for_display(Decimal("0.65")) == Decimal("0.65")
-
-    def test_negative_value_within_range_unchanged(self) -> None:
-        from tools.sub_program.logic import cap_percent_for_display
-
-        # -0.45 stored = -45% rendered — within range
-        assert cap_percent_for_display(Decimal("-0.45")) == Decimal("-0.45")
-
-    def test_positive_overflow_capped(self) -> None:
-        """The Mathematics row's 21.36 = 2,136% — cap to 999% (= 9.99)."""
-        from tools.sub_program.logic import cap_percent_for_display
-
-        assert cap_percent_for_display(Decimal("21.36")) == Decimal("9.99")
-
-    def test_negative_overflow_capped(self) -> None:
-        """An extreme over-spend like Admin's effective -230% — cap to
-        -999% (= -9.99)."""
-        from tools.sub_program.logic import cap_percent_for_display
-
-        assert cap_percent_for_display(Decimal("-50.0")) == Decimal("-9.99")
-
-    def test_exactly_at_boundary(self) -> None:
-        from tools.sub_program.logic import cap_percent_for_display
-
-        # Exactly 999% (= 9.99) is allowed
-        assert cap_percent_for_display(Decimal("9.99")) == Decimal("9.99")
-        assert cap_percent_for_display(Decimal("-9.99")) == Decimal("-9.99")
-
-    def test_just_over_boundary_is_capped(self) -> None:
-        from tools.sub_program.logic import cap_percent_for_display
-
-        assert cap_percent_for_display(Decimal("10.00")) == Decimal("9.99")
+# Round 67 — TestPercentCap class deleted along with the
+# cap_percent_for_display function. The ±999% display cap was
+# dropped per user feedback that the ">999%" / "<-999%" markers
+# hid the actual magnitude.
 
 
 class TestF1XlsxIntegration:
@@ -2059,12 +2018,17 @@ class TestF1XlsxIntegration:
         cell = ws.cell(row=3, column=13).value
         assert cell == "Ongoing variance. Being monitored. Reviewed by council."
 
-    def test_xlsx_caps_percent_overflow(self, tmp_path: Path) -> None:
-        """Move F — a sub-program where rev_ytd / rev_budget = 21x is
-        capped to 999% (= 9.99 stored) for display."""
+    def test_xlsx_extreme_percent_writes_actual_formula(self, tmp_path: Path) -> None:
+        """Round 67: percent cells always carry the Excel formula, no
+        matter how large the result. A 21x revenue over-collection
+        used to render as the text marker ">999%" (Round 53 cap); now
+        it shows the actual computed percentage so a council reader
+        sees the true magnitude (≈2136%). The 0–100% data bar still
+        caps visually at 100% via Excel's standard clipping, so the
+        bar saturated + a large number together convey "scale of the
+        overage" at a glance."""
         out = tmp_path / "out.xlsx"
-        # Sub-program 4400 Mathematics: rev_b $1,000, rev_y $21,365.
-        # rev_pct = 21.365 → cap to 9.99.
+        # Sub-program 4400: rev_b $1,000, rev_y $21,365. rev_pct = 21.365.
         rev_line = self._line(
             sub_program="4400",
             account="Revenue",
@@ -2078,43 +2042,18 @@ class TestF1XlsxIntegration:
             ytd="2880",
         )
         _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
-        wb = openpyxl.load_workbook(out, data_only=True)
+        # Load without data_only so we read the formula text, not
+        # cached values (uncached formulas read back as None).
+        wb = openpyxl.load_workbook(out)
         ws = wb["Sub Program Report"]
-        # Round 66: Revenue Budget % Received YTD is at col 4 (moved
-        # from col 12 in R57; the two percent columns relocated
-        # between PROGRAM NAME and Status).
-        # R1 fix: capped values render as TEXT marker ">999%" / "<-999%"
-        # instead of the capped fraction — the marker survives print,
-        # while a numeric `999.0%` cell looks like a real measurement.
-        rev_pct_value = ws.cell(row=3, column=4).value
-        assert rev_pct_value == ">999%"
-
-    def test_xlsx_capped_cell_carries_note_with_uncapped_value(self, tmp_path: Path) -> None:
-        """When a percent is capped, attach a cell comment with the real
-        uncapped value so an investigator can see the truth."""
-        out = tmp_path / "out.xlsx"
-        rev_line = self._line(
-            sub_program="4400",
-            account="Revenue",
-            budget="1000",
-            ytd="21365",
-        )
-        exp_line = self._line(
-            sub_program="4400",
-            account="Expenditure",
-            budget="7200",
-            ytd="2880",
-        )
-        _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
-        wb = openpyxl.load_workbook(out, data_only=True)
-        ws = wb["Sub Program Report"]
-        # Round 66: Revenue % at col 4 (relocated with the
-        # percent-column move between PROGRAM NAME and Status).
+        # Round 66: Revenue Budget % Received YTD is at col 4 (the
+        # two percent columns relocated between PROGRAM NAME and Status).
         rev_pct_cell = ws.cell(row=3, column=4)
-        assert rev_pct_cell.comment is not None
-        assert "2136" in (rev_pct_cell.comment.text or "") or "21.36" in (
-            rev_pct_cell.comment.text or ""
-        )
+        # Formula not a marker.
+        assert rev_pct_cell.value == "=I3/G3"
+        # No cell comment (the comment was an artefact of the cap
+        # fallback; with no cap there's nothing to footnote).
+        assert rev_pct_cell.comment is None
 
     def test_xlsx_status_urgent_for_admin_scale_overrun(self, tmp_path: Path) -> None:
         """Round 56: an Admin sub-program at $700K spend on $582K
@@ -2283,12 +2222,12 @@ class TestF1Round1Fixes:
             == "Driver under investigation."
         )
 
-    def test_xlsx_capped_avail_pct_renders_text_marker(self, tmp_path: Path) -> None:
-        """R1 fix: capped percent now renders as ">999%" / "<-999%" text
-        instead of the capped fraction. The text survives print; the
-        cell-comment tooltip is screen-only and invisible on paper."""
-        # Build a sub-program with extreme over-spend → avail_pct < -9.99
-        # and another with extreme over-collection → rev_pct > 9.99.
+    def test_xlsx_extreme_revenue_pct_writes_formula(self, tmp_path: Path) -> None:
+        """Round 67 (was R1 fix): the writer no longer caps extreme
+        percents. A 2100% over-collection now renders as the actual
+        ``=I3/G3`` formula whose computed value is 21.0 (= 2100% in
+        the percent number format), letting the council reader see
+        the true magnitude."""
         rev = SubProgramLine(
             sub_program="9999",
             account="Revenue",
@@ -2311,14 +2250,15 @@ class TestF1Round1Fixes:
             faculty="Curriculum",
             is_over=False,
         )
-        out = tmp_path / "capped.xlsx"
+        out = tmp_path / "no_cap.xlsx"
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
-        wb = openpyxl.load_workbook(out, data_only=True)
+        # Load WITHOUT data_only so we can read the formula text
+        # (data_only mode returns cached values which are None when
+        # the file has never been opened by Excel).
+        wb = openpyxl.load_workbook(out)
         ws = wb["Sub Program Report"]
-        # rev_y / rev_b = 21 → cap to ">999%"
-        # Round 66: Revenue Budget % Received YTD at col 4 (relocated
-        # with the percent-column move).
-        assert ws.cell(row=3, column=4).value == ">999%"
+        # Round 66: Revenue Budget % Received YTD at col 4.
+        assert ws.cell(row=3, column=4).value == "=I3/G3"
 
     def test_xlsx_pink_fill_extends_to_status_column(self, tmp_path: Path) -> None:
         """R1 regression test: an over-budget row paints pink across all
@@ -2769,14 +2709,16 @@ class TestF1Round2Fixes:
         assert ws.column_dimensions["M"].width == 32
 
     def test_xlsx_capped_marker_with_pink_fill_and_text_format(self, tmp_path: Path) -> None:
-        """R2 regression test: a row that's both materially over AND
-        carries a capped percent renders the ``>999%`` text marker WITH
-        ``@`` text format AND HL_MISMATCH pink fill — three style
-        attributes simultaneously."""
+        """Round 67 rewrite — the writer no longer caps extreme
+        percents (was R2's pink + ">999%" marker + text format
+        combination, dropped per user feedback that the marker hid
+        the actual magnitude). A materially-over row with an
+        extreme percent now carries the raw formula AND the pink
+        fill simultaneously."""
         from toolkit.tokens import HL_MISMATCH
 
         # Engineer a row with rev_pct way over 999% AND a material
-        # available-deficit so all three style channels apply.
+        # over-spend so both the percent formula and the pink fill apply.
         rev = SubProgramLine(
             sub_program="9001",
             account="Revenue",
@@ -2801,17 +2743,17 @@ class TestF1Round2Fixes:
         )
         out = tmp_path / "tri_style.xlsx"
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
-        wb = openpyxl.load_workbook(out, data_only=True)
+        # Round 67: load without data_only so the formula text is
+        # visible (data_only returns None for un-cached formulas).
+        wb = openpyxl.load_workbook(out)
         ws = wb["Sub Program Report"]
         # Round 66: Revenue % at col 4 (relocated with the
         # percent-column move between PROGRAM NAME and Status).
         rev_pct_cell = ws.cell(row=3, column=4)
-        # Capped marker.
-        assert rev_pct_cell.value == ">999%"
-        # Text format.
-        assert rev_pct_cell.number_format == "@"
+        # Round 67: raw formula, no marker.
+        assert rev_pct_cell.value == "=I3/G3"
         # Pink fill (row is materially over, so the pink-fill loop
-        # paints col 12 too).
+        # paints col 4 too).
         rgb = rev_pct_cell.fill.fgColor.rgb if rev_pct_cell.fill.fgColor is not None else None
         assert rgb is not None and HL_MISMATCH in rgb.upper()
 
