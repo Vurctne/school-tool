@@ -502,22 +502,24 @@ class TestGenerateReport:
             f"Expected 'Sub Program Report' sheet; got {wb.sheetnames}"
         )
         ws = wb["Sub Program Report"]
-        # Round 57 layout: Status (col 3) leads the financials; the F2
-        # Trend column was dropped, so Funds from Previous Years moves
-        # up to col 4 and the rest shift left by 1. Total 13 cols.
+        # Round 66 layout: Available Balance % YTD (col 3) and Revenue
+        # Budget % Received YTD (col 4) moved between PROGRAM NAME
+        # and Status. Status now at col 5; financials shift right by
+        # 2. Avail Balance YTD ends up at col 12 (was col 10 pre-R66).
+        # Total 13 cols.
         headers = [str(ws.cell(2, c).value or "") for c in range(1, 14)]
         assert headers[0] == "CODE"
         assert headers[1] == "PROGRAM NAME"
-        assert headers[2] == "Status"
-        assert headers[3].startswith("Funds from Previous Years")
-        assert headers[4].startswith("Budget Revenue")
-        assert headers[5].startswith("Total Budget Allocation Expenditure")
-        assert headers[6] == "Revenue YTD"
-        assert headers[7] == "Expenditure YTD"
-        assert headers[8] == "Less outstanding orders"
-        assert headers[9] == "Available Balance YTD"
-        assert headers[10] == "Available Balance % YTD"
-        assert headers[11] == "Revenue Budget % Received YTD"
+        assert headers[2] == "Available Balance % YTD"
+        assert headers[3] == "Revenue Budget % Received YTD"
+        assert headers[4] == "Status"
+        assert headers[5].startswith("Funds from Previous Years")
+        assert headers[6].startswith("Budget Revenue")
+        assert headers[7].startswith("Total Budget Allocation Expenditure")
+        assert headers[8] == "Revenue YTD"
+        assert headers[9] == "Expenditure YTD"
+        assert headers[10] == "Less outstanding orders"
+        assert headers[11] == "Available Balance YTD"
         assert headers[12] == "Comments"
 
     def test_output_row_count_matches_unique_subprograms(self, tmp_path: Path) -> None:
@@ -1997,14 +1999,16 @@ class TestF1XlsxIntegration:
             commentary_action=action,
         )
 
-    def test_xlsx_has_status_column_13(self, tmp_path: Path) -> None:
-        """Move B — new Status column at position 13 (after Comments)."""
+    def test_xlsx_has_status_column_5(self, tmp_path: Path) -> None:
+        """Round 66 — Status column at position 5 (was col 3 in
+        R57 layout). Two percent columns now between PROGRAM NAME
+        and Status."""
         out = tmp_path / "out.xlsx"
         _write_xlsx([self._line()], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # Row 2 is the header.
-        assert ws.cell(row=2, column=3).value == "Status"
+        assert ws.cell(row=2, column=5).value == "Status"
 
     def test_xlsx_status_column_renders_pill_value(self, tmp_path: Path) -> None:
         out = tmp_path / "out.xlsx"
@@ -2026,7 +2030,7 @@ class TestF1XlsxIntegration:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # Data row 3, Status col 13. Available = rev_y − exp_y = 6000 − 5000 = +1000.
-        assert ws.cell(row=3, column=3).value == "On track"
+        assert ws.cell(row=3, column=5).value == "On track"
 
     def test_xlsx_comments_cell_uses_prose_form(self, tmp_path: Path) -> None:
         """Move E + R1 fix: prose renders as two short sentences (was em-
@@ -2076,12 +2080,13 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        # Round 57: Revenue % Received YTD is column 12 (was 13 in F2,
-        # shifted left after Trend column dropped).
-        # R1 fix: capped values now render as TEXT marker ">999%" / "<-999%"
+        # Round 66: Revenue Budget % Received YTD is at col 4 (moved
+        # from col 12 in R57; the two percent columns relocated
+        # between PROGRAM NAME and Status).
+        # R1 fix: capped values render as TEXT marker ">999%" / "<-999%"
         # instead of the capped fraction — the marker survives print,
         # while a numeric `999.0%` cell looks like a real measurement.
-        rev_pct_value = ws.cell(row=3, column=12).value
+        rev_pct_value = ws.cell(row=3, column=4).value
         assert rev_pct_value == ">999%"
 
     def test_xlsx_capped_cell_carries_note_with_uncapped_value(self, tmp_path: Path) -> None:
@@ -2103,8 +2108,9 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev_line, exp_line], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        # Round 57: Revenue % at col 12 (was 13 in F2).
-        rev_pct_cell = ws.cell(row=3, column=12)
+        # Round 66: Revenue % at col 4 (relocated with the
+        # percent-column move between PROGRAM NAME and Status).
+        rev_pct_cell = ws.cell(row=3, column=4)
         assert rev_pct_cell.comment is not None
         assert "2136" in (rev_pct_cell.comment.text or "") or "21.36" in (
             rev_pct_cell.comment.text or ""
@@ -2135,7 +2141,7 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=3).value == "Investigate urgently"
+        assert ws.cell(row=3, column=5).value == "Investigate urgently"
 
     def test_xlsx_status_on_track_when_budget_set_no_movement(self, tmp_path: Path) -> None:
         """Round 56 — without calendar awareness we can't distinguish
@@ -2158,7 +2164,7 @@ class TestF1XlsxIntegration:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=3).value == "On track"
+        assert ws.cell(row=3, column=5).value == "On track"
 
 
 # ---------------------------------------------------------------------------
@@ -2310,8 +2316,9 @@ class TestF1Round1Fixes:
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
         # rev_y / rev_b = 21 → cap to ">999%"
-        # Round 57: Revenue % at col 12 (was 13 in F2).
-        assert ws.cell(row=3, column=12).value == ">999%"
+        # Round 66: Revenue Budget % Received YTD at col 4 (relocated
+        # with the percent-column move).
+        assert ws.cell(row=3, column=4).value == ">999%"
 
     def test_xlsx_pink_fill_extends_to_status_column(self, tmp_path: Path) -> None:
         """R1 regression test: an over-budget row paints pink across all
@@ -2346,7 +2353,7 @@ class TestF1Round1Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        status_cell = ws.cell(row=3, column=3)
+        status_cell = ws.cell(row=3, column=5)
         # The pink fill is the canonical HL_MISMATCH ARGB. The fgColor
         # may surface as either an RGB or theme reference depending on
         # openpyxl version; check the suffix.
@@ -2385,7 +2392,7 @@ class TestF1Round1Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        status_cell = ws.cell(row=3, column=3)
+        status_cell = ws.cell(row=3, column=5)
         # Round 56: 'No spend yet' pill removed; budgeted-with-zero-spend
         # rows now read as On track. The bold styling that emphasised
         # the No-spend-yet pill no longer applies here.
@@ -2422,7 +2429,7 @@ class TestF1Round1Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        status = ws.cell(row=3, column=3).value
+        status = ws.cell(row=3, column=5).value
         comments = ws.cell(row=3, column=13).value
         assert status == "Investigate urgently"
         # R2 fix: imperative cue for non-OK statuses (was archival).
@@ -2734,7 +2741,7 @@ class TestF1Round2Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=3).value == "On track"
+        assert ws.cell(row=3, column=5).value == "On track"
         # On-track rows leave Comments empty — no contradiction to fix.
         assert ws.cell(row=3, column=13).value is None
 
@@ -2796,8 +2803,9 @@ class TestF1Round2Fixes:
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        # Round 57: Revenue % at col 12 (was 13 in F2).
-        rev_pct_cell = ws.cell(row=3, column=12)
+        # Round 66: Revenue % at col 4 (relocated with the
+        # percent-column move between PROGRAM NAME and Status).
+        rev_pct_cell = ws.cell(row=3, column=4)
         # Capped marker.
         assert rev_pct_cell.value == ">999%"
         # Text format.
@@ -2839,30 +2847,44 @@ class TestF2XlsxLayout:
             is_over=False,
         )
 
-    def test_header_row_status_at_col_3(self, tmp_path: Path) -> None:
+    def test_header_row_status_at_col_5(self, tmp_path: Path) -> None:
+        """Round 66 — Status column at col 5 (was col 3 in R57; the
+        two percent columns moved between PROGRAM NAME and Status)."""
         out = tmp_path / "out.xlsx"
         rev = self._line("4001", "Revenue", "10000", "5000")
         exp = self._line("4001", "Expenditure", "10000", "5000")
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=2, column=3).value == "Status"
+        assert ws.cell(row=2, column=5).value == "Status"
 
-    def test_header_row_funds_at_col_4(self, tmp_path: Path) -> None:
-        """Round 57: Trend column dropped; Funds from Previous Years
-        moves up from col 5 to col 4 (right after Status)."""
+    def test_header_row_funds_at_col_6(self, tmp_path: Path) -> None:
+        """Round 66: Funds from Previous Years at col 6 (was col 4 in
+        R57; shifted right by 2 with the percent-columns move)."""
         out = tmp_path / "out.xlsx"
         rev = self._line("4001", "Revenue", "10000", "5000")
         exp = self._line("4001", "Expenditure", "10000", "5000")
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        header = str(ws.cell(row=2, column=4).value or "")
+        header = str(ws.cell(row=2, column=6).value or "")
         assert header.startswith("Funds from Previous Years")
+
+    def test_header_row_percent_columns_at_3_and_4(self, tmp_path: Path) -> None:
+        """Round 66: the two percent columns sit at C/D so the council
+        reader's eye lands on the at-a-glance bars before Status."""
+        out = tmp_path / "out.xlsx"
+        rev = self._line("4001", "Revenue", "10000", "5000")
+        exp = self._line("4001", "Expenditure", "10000", "5000")
+        _write_xlsx([rev, exp], out, period_label="Apr 2026")
+        wb = openpyxl.load_workbook(out, data_only=True)
+        ws = wb["Sub Program Report"]
+        assert ws.cell(row=2, column=3).value == "Available Balance % YTD"
+        assert ws.cell(row=2, column=4).value == "Revenue Budget % Received YTD"
 
     def test_header_row_comments_at_col_13(self, tmp_path: Path) -> None:
         """Round 57: Comments shifts left from col 14 to col 13 after
-        Trend column drop."""
+        Trend column drop. Round 66 left this unchanged at col 13."""
         out = tmp_path / "out.xlsx"
         rev = self._line("4001", "Revenue", "10000", "5000")
         exp = self._line("4001", "Expenditure", "10000", "5000")
@@ -2871,14 +2893,14 @@ class TestF2XlsxLayout:
         ws = wb["Sub Program Report"]
         assert ws.cell(row=2, column=13).value == "Comments"
 
-    def test_data_row_status_at_col_3(self, tmp_path: Path) -> None:
+    def test_data_row_status_at_col_5(self, tmp_path: Path) -> None:
         out = tmp_path / "out.xlsx"
         rev = self._line("4001", "Revenue", "10000", "6000")
         exp = self._line("4001", "Expenditure", "10000", "5000")
         _write_xlsx([rev, exp], out, period_label="Apr 2026")
         wb = openpyxl.load_workbook(out, data_only=True)
         ws = wb["Sub Program Report"]
-        assert ws.cell(row=3, column=3).value == "On track"
+        assert ws.cell(row=3, column=5).value == "On track"
 
 
 class TestF2WatchlistSheet:

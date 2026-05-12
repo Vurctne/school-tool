@@ -158,12 +158,15 @@ _WATCHLIST_COLUMNS: list[dict[str, Any]] = [
 # Round 64 — Preview tab columns. Mirrors the XLSX "Sub Program Report"
 # sheet (13 cols) so the user can see what the export will look like
 # without opening Excel. One row per sub-program, both Revenue and
-# Expenditure aggregated. Layout parallels the writer's column order:
-# CODE, NAME, Status, Funds, Budget Rev, Budget Exp, Rev YTD, Exp YTD,
-# Orders, Available Balance YTD, Avail %, Rev %, Comments.
+# Expenditure aggregated.
+# Round 66 — column order matches the new XLSX layout: percent
+# columns moved between Program name and Status. So the Preview
+# tab tracks the export exactly.
 _PREVIEW_COLUMNS: list[dict[str, Any]] = [
     {"key": "code", "label": "CODE", "width": 60, "mono": True},
     {"key": "name", "label": "Program name"},
+    {"key": "avail_pct", "label": "Avail %", "width": 70, "align": "right", "mono": True},
+    {"key": "rev_pct", "label": "Rev %", "width": 70, "align": "right", "mono": True},
     {"key": "status", "label": "Status", "width": 130, "mono": False},
     {"key": "funds", "label": "Funds prev. yrs", "width": 100, "align": "right", "mono": True},
     {"key": "budget_rev", "label": "Budget Rev", "width": 100, "align": "right", "mono": True},
@@ -172,8 +175,6 @@ _PREVIEW_COLUMNS: list[dict[str, Any]] = [
     {"key": "exp_ytd", "label": "Exp YTD", "width": 100, "align": "right", "mono": True},
     {"key": "orders", "label": "Orders", "width": 100, "align": "right", "mono": True},
     {"key": "avail", "label": "Avail Bal YTD", "width": 110, "align": "right", "mono": True},
-    {"key": "avail_pct", "label": "Avail %", "width": 70, "align": "right", "mono": True},
-    {"key": "rev_pct", "label": "Rev %", "width": 70, "align": "right", "mono": True},
     {"key": "comments", "label": "Comments", "width": 180},
 ]
 

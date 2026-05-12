@@ -1811,21 +1811,22 @@ def _write_monthly_sub_program_sheet(
     """Round 57 — Monthly Sub Program Report shape (13-col).
 
     Per-sub-program output matching the school's own "Monthly Sub
-    Program Report" workbook. Round 57 dropped the F2 Trend column;
-    the layout is now:
+    Program Report" workbook. Round 66 moved the two percent columns
+    between PROGRAM NAME and Status so the at-a-glance bars sit
+    immediately next to the program name:
 
     1.  CODE                                 sub_program code
     2.  PROGRAM NAME                         description
-    3.  Status                                computed pill
-    4.  Funds from Previous Years (Funds)    carry-forward (from prior file)
-    5.  Budget Revenue {year}                annual revenue budget
-    6.  Total Budget Allocation Expenditure  annual expenditure budget
-    7.  Revenue YTD                          revenue collected so far
-    8.  Expenditure YTD                      expenditure spent so far
-    9.  Less outstanding orders              committed-but-not-paid
-    10. Available Balance YTD                =F{r}-H{r}-I{r}
-    11. Available Balance % YTD              =J{r}/F{r}
-    12. Revenue Budget % Received YTD        =G{r}/E{r}
+    3.  Available Balance % YTD              =L{r}/H{r}
+    4.  Revenue Budget % Received YTD        =I{r}/G{r}
+    5.  Status                                computed pill
+    6.  Funds from Previous Years (Funds)    carry-forward (from prior file)
+    7.  Budget Revenue {year}                annual revenue budget
+    8.  Total Budget Allocation Expenditure  annual expenditure budget
+    9.  Revenue YTD                          revenue collected so far
+    10. Expenditure YTD                      expenditure spent so far
+    11. Less outstanding orders              committed-but-not-paid
+    12. Available Balance YTD                =H{r}-J{r}-K{r}
     13. Comments                             commentary
 
     Round 57: the three derived numeric columns (Available Balance YTD,
@@ -1997,30 +1998,32 @@ def _write_monthly_sub_program_sheet(
     exp_budget_header = f"Total Budget Allocation Expenditure {year_label}".strip()
 
     headers = [
-        # R57 layout: Status at col 3 leads the financials so the eye
-        # lands on the call-to-action before the dollar columns. The
-        # F2 Trend column was dropped per user direction — the Status
-        # pill alone carries the call-to-attention; Trend was rarely
-        # populated in practice (required a prior-period file).
-        "CODE",
-        "PROGRAM NAME",
-        "Status",
-        "Funds from Previous Years (Funds) ",
-        rev_budget_header,
-        exp_budget_header,
-        "Revenue YTD",
-        "Expenditure YTD",
-        "Less outstanding orders",
-        "Available Balance YTD",
-        "Available Balance % YTD",
-        "Revenue Budget % Received YTD",
-        "Comments",
+        # Round 66 layout: the two percent columns (Available Balance %
+        # YTD and Revenue Budget % Received YTD) moved between PROGRAM
+        # NAME and Status. Council reader scans left-to-right and the
+        # at-a-glance percent bars now sit immediately next to the
+        # program name — they're the headline signal, even before the
+        # Status pill. Status still leads the dollar columns; the
+        # ordering of Funds / Budgets / YTDs / Orders / Avail $ /
+        # Comments is unchanged.
+        "CODE",  # A
+        "PROGRAM NAME",  # B
+        "Available Balance % YTD",  # C  (moved from old K)
+        "Revenue Budget % Received YTD",  # D  (moved from old L)
+        "Status",  # E  (was C)
+        "Funds from Previous Years (Funds) ",  # F  (was D)
+        rev_budget_header,  # G  (was E)
+        exp_budget_header,  # H  (was F)
+        "Revenue YTD",  # I  (was G)
+        "Expenditure YTD",  # J  (was H)
+        "Less outstanding orders",  # K  (was I)
+        "Available Balance YTD",  # L  (was J)
+        "Comments",  # M  (unchanged)
     ]
-    # R57 widths: 13 cols (the F2 Trend col 16 unit was reclaimed).
-    # Comments stays 32 (relieves print compression). Total widths
-    # sum 230 char-units; landscape A4 fit-to-width has ~277 usable
-    # at the configured 0.4" L/R margins, leaving ~17% margin.
-    widths = [8, 32, 22, 14, 16, 22, 14, 14, 14, 16, 12, 14, 32]
+    # Round 66 — width slots reshuffled to match. Percent cols (12, 14)
+    # are narrower than the now-rightmost Avail Balance YTD ($, 16);
+    # Status (22) keeps its old slot. Total still ~230 units.
+    widths = [8, 32, 12, 14, 22, 14, 16, 22, 14, 14, 14, 16, 32]
     for col_idx, (header, width) in enumerate(zip(headers, widths, strict=True), start=1):
         cell = ws.cell(row=2, column=col_idx, value=header)
         cell.font = Font(bold=True)
@@ -2028,17 +2031,20 @@ def _write_monthly_sub_program_sheet(
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
     # ----- Data rows -----
-    # Round 57 column layout (after dropping Trend):
-    #   D = Funds from Previous Years    (was E)
-    #   E = Budget Revenue               (was F)
-    #   F = Budget Expenditure           (was G)
-    #   G = Revenue YTD                  (was H)
-    #   H = Expenditure YTD              (was I)
-    #   I = Less outstanding orders      (was J)
-    #   J = Available Balance YTD        (=D+G-H-I)
-    #   K = Available Balance % YTD      (=J/F)
-    #   L = Revenue Budget % Received    (=G/E)
-    #   M = Comments
+    # Round 66 column layout (percent columns moved to C/D):
+    #   A = CODE
+    #   B = PROGRAM NAME
+    #   C = Available Balance % YTD     (=L/H)
+    #   D = Revenue Budget % Received   (=I/G)
+    #   E = Status pill                 (was C)
+    #   F = Funds from Previous Years    (was D)
+    #   G = Budget Revenue               (was E)
+    #   H = Budget Expenditure           (was F)
+    #   I = Revenue YTD                  (was G)
+    #   J = Expenditure YTD              (was H)
+    #   K = Less outstanding orders      (was I)
+    #   L = Available Balance YTD        =H-J-K  (was J, =F-H-I)
+    #   M = Comments                     (unchanged)
     for row_idx, sp in enumerate(sub_programs, start=3):
         ry = rev_y.get(sp, Decimal("0"))
         ey = exp_y.get(sp, Decimal("0"))
@@ -2059,46 +2065,43 @@ def _write_monthly_sub_program_sheet(
 
         ws.cell(row=row_idx, column=1, value=_to_int_or_str(sp))
         ws.cell(row=row_idx, column=2, value=desc.get(sp, ""))
-        # Status (col 3) is populated below — we write it after
+        # Status (col 5) is populated below — we write it after
         # computing the pill so the cell write happens in one place.
 
-        # Funds from Previous Years (col 4) — value when known, blank
+        # Funds from Previous Years (col 6/F) — value when known, blank
         # when not. carry_fwd is None when no prior file supplied or
         # this sub-program wasn't in it.
         if carry_fwd is not None:
-            c = ws.cell(row=row_idx, column=4, value=float(carry_fwd))
+            c = ws.cell(row=row_idx, column=6, value=float(carry_fwd))
             c.number_format = _ACCOUNTING_FMT
 
-        # Cols 5..9 are raw inputs (parsed from the PDF) — these stay
-        # as values. Cols 10..12 are derived and become formulas so
-        # the user can audit how each number is computed.
+        # Cols 7..11 are raw inputs (parsed from the PDF). Col 12 is
+        # the Available Balance YTD formula; cols 3 & 4 are the
+        # percent formulas — both rendered to the left of Status so
+        # the council reader sees the at-a-glance bars first.
         for col_idx, value in (
-            (5, rb),  # Budget Revenue
-            (6, eb),  # Budget Expenditure
-            (7, ry),  # Revenue YTD
-            (8, ey),  # Expenditure YTD
-            (9, oo),  # Outstanding orders
+            (7, rb),  # Budget Revenue
+            (8, eb),  # Budget Expenditure
+            (9, ry),  # Revenue YTD
+            (10, ey),  # Expenditure YTD
+            (11, oo),  # Outstanding orders
         ):
             c = ws.cell(row=row_idx, column=col_idx, value=float(value))
             c.number_format = _ACCOUNTING_FMT
 
-        # Round 65 — Available Balance YTD (col 10/J) formula now
-        # mirrors the KMAR reference workbook's semantics:
-        #   Available Balance = Annual Expenditure Budget − Expenditure YTD − Outstanding Orders
+        # Round 65 — Available Balance YTD (col 12/L) formula:
+        #   = Annual Expenditure Budget − Expenditure YTD − Outstanding Orders
         # i.e. "how much expenditure budget is left to spend after
-        # committed orders settle". Pre-R65 used =D+G-H-I (Funds +
-        # Revenue YTD − Expenditure YTD − Orders) which mixed cash-
-        # flow signals with budget-remaining signals and didn't match
-        # the council-facing KMAR template. For 7001 Administration:
-        #   KMAR (R65): $581,700 − $192,126 − $1,732,527 = −$1,342,953
-        #   Pre-R65:   0 + $26,436 − $192,126 − $1,732,527 = −$1,898,217
-        avail_formula = f"=F{row_idx}-H{row_idx}-I{row_idx}"
-        avail_cell = ws.cell(row=row_idx, column=10, value=avail_formula)
+        # committed orders settle". Mirrors the KMAR reference
+        # workbook. Round 66: col letters shifted by 2 (H/J/K were
+        # F/H/I); formula structure unchanged.
+        avail_formula = f"=H{row_idx}-J{row_idx}-K{row_idx}"
+        avail_cell = ws.cell(row=row_idx, column=12, value=avail_formula)
         avail_cell.number_format = _ACCOUNTING_FMT
 
-        # Round 57 — Available Balance % YTD (col 11/K) and Revenue
-        # Budget % Received YTD (col 12/L) as Excel formulas with
-        # display-cap fallback.
+        # Round 57 — Available Balance % YTD (col 3/C, Round 66 moved
+        # from K) and Revenue Budget % Received YTD (col 4/D, Round 66
+        # moved from L) as Excel formulas with display-cap fallback.
         # Round 53 F1 (Move F) — cap unbounded percents at ±999% for
         # display so a non-finance reader sees a finite number. When
         # the computed value exceeds the cap, write a text marker
@@ -2137,24 +2140,25 @@ def _write_monthly_sub_program_sheet(
 
         avail_pct: Decimal | None = available / eb if eb != 0 else None
         rev_pct: Decimal | None = ry / rb if rb != 0 else None
-        # Available % formula: =J{r}/F{r} (uses the avail formula's cell)
+        # Available Balance % formula: =L{r}/H{r}  (Avail YTD ÷ Budget Exp)
         _write_capped_percent_or_formula(
             row_idx,
-            11,
+            3,
             avail_pct,
-            f"=J{row_idx}/F{row_idx}",
+            f"=L{row_idx}/H{row_idx}",
             "Available Balance %",
         )
-        # Revenue % formula: =G{r}/E{r}
+        # Revenue Budget % Received formula: =I{r}/G{r}  (Rev YTD ÷ Budget Rev)
         _write_capped_percent_or_formula(
             row_idx,
-            12,
+            4,
             rev_pct,
-            f"=G{row_idx}/E{row_idx}",
+            f"=I{row_idx}/G{row_idx}",
             "Revenue % Received",
         )
 
-        # Round 53 F1 (Move B) — Status pill at col 3. Round 56:
+        # Round 53 F1 (Move B) — Status pill at col 5 (was col 3
+        # pre-R66; the two percent columns moved before it). Round 56:
         # pacing-free contract; compute_status_pill gates on
         # ``exp_ytd > expense_threshold% × annual_exp_budget``.
         # Round 62 — Revenue-side check added.
@@ -2167,7 +2171,7 @@ def _write_monthly_sub_program_sheet(
             expense_threshold=expense_threshold,
             materiality_dollar=materiality_dollar,
         )
-        status_cell = ws.cell(row=row_idx, column=3, value=status)
+        status_cell = ws.cell(row=row_idx, column=5, value=status)
         # Bold the call-for-attention pills so they stand out on print.
         if status in (
             _STATUS_URGENT,
@@ -2262,25 +2266,24 @@ def _write_monthly_sub_program_sheet(
     last_data_row = max(2, 2 + len(sub_programs))
     ws.print_area = f"A1:M{last_data_row}"
 
-    # Round 65 — green data bars on the two percent columns:
-    #   K = Available Balance % YTD
-    #   L = Revenue Budget % Received YTD
-    # Bar range pinned to 0%–100% on both so the visual scale is
-    # consistent across runs: a 50% bar always means "half the
-    # budget left / half received" regardless of the maximum value
-    # in the current dataset. Auto-scale (start=min, end=max) was
-    # tried earlier but produced confusing results when one row had
-    # a wildly large percent (e.g. unbudgeted-rev programs with
-    # avail % > 500%, or revenue rows over-collecting at 2000%) —
-    # everything else collapsed to a sliver. Cells storing values
-    # outside the 0–1 range still render via Excel's data-bar
-    # clipping (negative values render no bar; >100% bars saturate
-    # at full width). Values are stored as fractions per
-    # _PERCENT_AS_PERCENT_FMT, so 100% = stored 1.0.
+    # Round 65 — green data bars on the two percent columns.
+    # Round 66: both columns moved from K/L to C/D (now positioned
+    # between PROGRAM NAME and Status). Bar range pinned to 0%–100%
+    # so the visual scale is consistent across runs: a 50% bar
+    # always means "half the budget left / half received"
+    # regardless of the maximum value in the current dataset.
+    # Auto-scale (start=min, end=max) was tried earlier but produced
+    # confusing results when one row had a wildly large percent
+    # (e.g. unbudgeted-rev programs with avail % > 500%, or revenue
+    # rows over-collecting at 2000%) — everything else collapsed to
+    # a sliver. Cells storing values outside the 0–1 range still
+    # render via Excel's data-bar clipping (negative values render
+    # no bar; >100% bars saturate at full width). Values are stored
+    # as fractions per _PERCENT_AS_PERCENT_FMT, so 100% = stored 1.0.
     if sub_programs:
         from openpyxl.formatting.rule import DataBarRule
 
-        for col_letter in ("K", "L"):
+        for col_letter in ("C", "D"):
             ws.conditional_formatting.add(
                 f"{col_letter}3:{col_letter}{last_data_row}",
                 DataBarRule(  # type: ignore[no-untyped-call]

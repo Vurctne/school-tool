@@ -1158,10 +1158,10 @@ class TestRound22bViewTabs:
             assert "Bridge" not in lbl
 
     def test_preview_tab_has_xlsx_layout(self) -> None:
-        """Round 64 — Preview tab columns match the XLSX Sub Program
-        Report sheet: CODE, Program name, Status, Funds, Budget Rev,
-        Budget Exp, Rev YTD, Exp YTD, Orders, Avail Bal YTD, Avail %,
-        Rev %, Comments (13 columns)."""
+        """Round 66 — Preview tab columns match the new XLSX layout:
+        the two percent columns (Avail %, Rev %) sit between Program
+        name and Status (was at the right end pre-R66). 13 columns
+        total."""
         tool = SubProgramBudgetReportTool()
         lines = [
             self._line("1251", "Revenue", "1000"),
@@ -1177,6 +1177,8 @@ class TestRound22bViewTabs:
         assert col_keys == [
             "code",
             "name",
+            "avail_pct",
+            "rev_pct",
             "status",
             "funds",
             "budget_rev",
@@ -1185,8 +1187,6 @@ class TestRound22bViewTabs:
             "exp_ytd",
             "orders",
             "avail",
-            "avail_pct",
-            "rev_pct",
             "comments",
         ]
         # One row per sub-program (1251 + 4001 = 2 rows).

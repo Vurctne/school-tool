@@ -5,6 +5,24 @@ is at the top.
 
 ---
 
+## v2.4.25.0 — May 2026
+
+* **Sub-Program Budget Report — column re-order.** The two percent
+  columns moved between PROGRAM NAME and Status so the at-a-glance
+  data bars sit immediately next to the program name. Council reader
+  scans left-to-right and sees the percent bars (the headline signal)
+  before the Status pill. New 13-column order:
+  ``CODE | PROGRAM NAME | Available Balance % YTD | Revenue Budget %
+  Received YTD | Status | Funds from Previous Years | Budget Revenue |
+  Total Budget Allocation Expenditure | Revenue YTD | Expenditure YTD |
+  Less outstanding orders | Available Balance YTD | Comments``.
+  Formulas updated to the new column letters: Available Balance YTD
+  = ``=H-J-K``, Available Balance % = ``=L/H``, Revenue Budget %
+  Received = ``=I/G``. The in-app Preview tab tracks the new layout
+  exactly, so the export and the preview always match.
+
+---
+
 ## v2.4.24.0 — May 2026
 
 * **Sub-Program Budget Report — data bar added to Revenue Budget %
