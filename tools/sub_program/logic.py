@@ -2262,13 +2262,16 @@ def _write_monthly_sub_program_sheet(
     last_data_row = max(2, 2 + len(sub_programs))
     ws.print_area = f"A1:M{last_data_row}"
 
-    # Round 65 — green data bar on Available Balance % YTD (col K).
-    # Bar range pinned to 0%–100% so the visual scale is consistent
-    # across runs: a 50% remaining bar always means "half the budget
-    # left" regardless of the maximum value in the current dataset.
-    # Auto-scale (start=min, end=max) was tried earlier but produced
-    # confusing results when one row had a wildly large remaining
-    # percent (e.g. unbudgeted-rev programs with avail % > 500%) —
+    # Round 65 — green data bars on the two percent columns:
+    #   K = Available Balance % YTD
+    #   L = Revenue Budget % Received YTD
+    # Bar range pinned to 0%–100% on both so the visual scale is
+    # consistent across runs: a 50% bar always means "half the
+    # budget left / half received" regardless of the maximum value
+    # in the current dataset. Auto-scale (start=min, end=max) was
+    # tried earlier but produced confusing results when one row had
+    # a wildly large percent (e.g. unbudgeted-rev programs with
+    # avail % > 500%, or revenue rows over-collecting at 2000%) —
     # everything else collapsed to a sliver. Cells storing values
     # outside the 0–1 range still render via Excel's data-bar
     # clipping (negative values render no bar; >100% bars saturate
@@ -2277,18 +2280,18 @@ def _write_monthly_sub_program_sheet(
     if sub_programs:
         from openpyxl.formatting.rule import DataBarRule
 
-        avail_pct_range = f"K3:K{last_data_row}"
-        ws.conditional_formatting.add(
-            avail_pct_range,
-            DataBarRule(  # type: ignore[no-untyped-call]
-                start_type="num",
-                start_value=0,
-                end_type="num",
-                end_value=1,  # 1.0 = 100% (cells store fractions)
-                color=_DATA_BAR_COLOR,
-                showValue=True,
-            ),
-        )
+        for col_letter in ("K", "L"):
+            ws.conditional_formatting.add(
+                f"{col_letter}3:{col_letter}{last_data_row}",
+                DataBarRule(  # type: ignore[no-untyped-call]
+                    start_type="num",
+                    start_value=0,
+                    end_type="num",
+                    end_value=1,  # 1.0 = 100% (cells store fractions)
+                    color=_DATA_BAR_COLOR,
+                    showValue=True,
+                ),
+            )
 
     # F2 R1: AutoFilter + tab colour on the Watchlist sheet so the
     # council-targeted view is interactive and visually distinct.

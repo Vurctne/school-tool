@@ -5,6 +5,17 @@ is at the top.
 
 ---
 
+## v2.4.24.0 — May 2026
+
+* **Sub-Program Budget Report — data bar added to Revenue Budget %
+  Received YTD column** (col L). Same 0%–100% pinned range as the
+  Available Balance % column (col K) so the two percent columns
+  read visually consistent side by side. A council reader can scan
+  both bars to compare each sub-program's revenue collection
+  progress against its expenditure budget remaining.
+
+---
+
 ## v2.4.23.0 — May 2026
 
 * **Sub-Program Budget Report — data bar range pinned to 0%–100%.**
